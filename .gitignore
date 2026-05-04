@@ -1,0 +1,33 @@
+# 用户配置文件（包含敏感信息）
+modules/config.py
+
+# 用户数据
+data/*.json
+data/*.txt
+data/*.db
+data/downloads/
+output/
+
+# 测试报告
+test-reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log

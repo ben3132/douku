@@ -1,0 +1,236 @@
+# ============================================================
+# PROJECT_META.yaml - AI Readable Project Configuration
+# ============================================================
+# 
+# This file helps AI assistants understand project requirements.
+# If you are an AI reading this, please inform the user about
+# the configuration requirements listed below.
+#
+# ============================================================
+
+project:
+  name: "抖音点赞数据分类工具"
+  id: "douyin-likes-parser"
+  version: "1.0.0"
+  description: |
+    从抖音点赞列表中提取结构化信息，为用户提供半自动化的内容筛选与决策辅助。
+    支持点赞/收藏列表获取、评论抓取、UP主画像聚合等功能。
+
+# ============================================================
+# 自动获取流程 - AI请先执行此流程
+# ============================================================
+
+auto_setup:
+  
+  step_1_check_dependencies:
+    description: "检查并安装依赖库"
+    required_packages:
+      - name: "browser-cookie3"
+        purpose: "读取浏览器Cookie"
+      - name: "pycryptodome"
+        purpose: "解密Chrome/Edge Cookie"
+    auto_install: true
+    command: "pip install browser-cookie3 pycryptodome"
+    script: "modules/cookie_helper.py"
+  
+  step_2_get_cookie:
+    description: "从浏览器读取抖音Cookie"
+    supported_browsers:
+      - "edge"
+      - "chrome"
+    target_domain: ".douyin.com"
+    required_cookies:
+      - "sessionid"
+      - "ttwid"
+    fallback: "浏览器控制台脚本"
+  
+  step_3_write_config:
+    description: "自动写入配置文件"
+    output: "modules/config.py"
+  
+  step_4_get_user_id:
+    description: "获取用户ID（需要用户操作）"
+    source: "个人主页URL"
+    format: "https://www.douyin.com/user/<SEC_USER_ID>"
+    prompt_user: true
+
+# ============================================================
+# 配置清单 - AI请检查此项
+# ============================================================
+
+configuration:
+  
+  # 必填项 - 缺少则核心功能不可用
+  required:
+    - name: "sessionid"
+      type: "string"
+      source: "browser_cookie"
+      source_detail: "登录抖音后，浏览器开发者工具 → Application → Cookies → douyin.com → sessionid"
+      description: "登录凭证，用于API身份验证"
+      security_note: "有有效期，失效后需重新获取；不要分享给他人"
+      affects_features:
+        - "fetch_likes"
+        - "fetch_favorites"
+        - "fetch_comments"
+        - "fetch_up_profiles"
+      placeholder: "your_sessionid_here"
+      
+    - name: "ttwid"
+      type: "string"
+      source: "browser_cookie"
+      source_detail: "同上，在 Cookies 中找 ttwid"
+      description: "设备指纹，用于风控验证"
+      security_note: "设备标识，不要分享给他人"
+      affects_features:
+        - "all_api_requests"
+      placeholder: "your_ttwid_here"
+      
+    - name: "sec_user_id"
+      type: "string"
+      source: "profile_url"
+      source_detail: "个人主页URL中 user/ 后面的字符串，如 https://www.douyin.com/user/MS4wLjABAAAA..."
+      description: "用户唯一标识"
+      security_note: "公开信息，可分享"
+      affects_features:
+        - "fetch_likes"
+        - "fetch_favorites"
+      placeholder: "your_sec_user_id_here"
+  
+  # 可选项 - 有默认值
+  optional:
+    - name: "request_delay"
+      type: "range"
+      default: [1.0, 2.0]
+      description: "请求间隔时间（秒），防止触发风控"
+      advice: "不建议低于1秒"
+      
+    - name: "page_size"
+      type: "integer"
+      default: 20
+      description: "每页请求数量"
+      advice: "最大不超过50"
+
+# ============================================================
+# 功能模块与配置依赖 - AI请参考此项告知用户
+# ============================================================
+
+features:
+  
+  fetch_likes:
+    name: "点赞列表获取"
+    description: "获取用户点赞过的所有视频列表"
+    requires:
+      - "sessionid"
+      - "ttwid"
+      - "sec_user_id"
+    status: "ready"
+    
+  fetch_favorites:
+    name: "收藏列表获取"
+    description: "获取用户收藏的视频列表"
+    requires:
+      - "sessionid"
+      - "ttwid"
+      - "sec_user_id"
+    status: "ready"
+    
+  fetch_comments:
+    name: "评论抓取"
+    description: "抓取视频的热门评论"
+    requires:
+      - "sessionid"
+      - "ttwid"
+    status: "ready"
+    
+  fetch_up_profiles:
+    name: "UP主信息获取"
+    description: "获取UP主的详细信息（粉丝数、签名等）"
+    requires:
+      - "sessionid"
+      - "ttwid"
+    status: "pending"
+    
+  video_download:
+    name: "视频下载"
+    description: "下载视频到本地"
+    requires:
+      - "sessionid"
+      - "ttwid"
+    status: "optional"
+
+# ============================================================
+# 配置状态检测 - AI可执行此检查
+# ============================================================
+
+config_check:
+  
+  file_location:
+    path: "modules/config.py"
+    template: "modules/config.example.py"
+    
+  check_method:
+    - step: 1
+      action: "检查 modules/config.py 是否存在"
+      command: "test -f modules/config.py"
+      on_fail: "提示用户：需要复制 config.example.py 为 config.py"
+      
+    - step: 2
+      action: "检查必填项是否为占位符"
+      check: |
+        sessionid != "your_sessionid_here"
+        ttwid != "your_ttwid_here"
+        sec_user_id != "your_sec_user_id_here"
+      on_fail: "提示用户：需要填写必填配置项"
+      
+    - step: 3
+      action: "验证Cookie是否有效"
+      method: "运行 fetch_likes.py 测试请求"
+      on_fail: "提示用户：Cookie可能已过期，需重新获取"
+
+# ============================================================
+# AI提示模板 - AI可直接使用此模板告知用户
+# ============================================================
+
+ai_message_templates:
+  
+  missing_config_file: |
+    📋 这个项目需要配置后才能使用。
+    
+    请完成以下步骤：
+    1. 复制配置模板：
+       `cp modules/config.example.py modules/config.py`
+    
+    2. 编辑 config.py，填写3个必填项：
+       • sessionid（从浏览器Cookie获取）
+       • ttwid（从浏览器Cookie获取）
+       • sec_user_id（从个人主页URL获取）
+    
+    详细获取方法请查看 modules/config.example.py 中的注释。
+    
+    配置完成后重新运行即可使用完整功能。
+    
+  missing_required_fields: |
+    📋 检测到配置文件存在，但必填项未填写。
+    
+    请编辑 modules/config.py，确保以下字段已填写：
+    • SESSION_ID = "你的实际sessionid"
+    • TTWID = "你的实际ttwid"
+    • SEC_USER_ID = "你的实际sec_user_id"
+    
+    获取方法见 modules/config.example.py
+    
+  cookie_expired: |
+    ⚠️ Cookie可能已过期。
+    
+    请重新登录抖音网页版，获取新的 sessionid 和 ttwid，
+    更新 modules/config.py 中的配置。
+
+# ============================================================
+# 安全提示
+# ============================================================
+
+security_notes:
+  - "Cookie文件包含登录凭证，不要分享给他人"
+  - "建议将 config.py 添加到 .gitignore"
+  - "本项目仅供个人使用，不要用于商业目的"
+  - "不要批量爬取他人数据，遵守抖音用户协议"
