@@ -31,7 +31,7 @@ auto_setup:
         purpose: "解密Chrome/Edge Cookie"
     auto_install: true
     command: "pip install browser-cookie3 pycryptodome"
-    script: "modules/cookie_helper.py"
+    script: "modules/playwright_cookie.py"
   
   step_2_get_cookie:
     description: "从浏览器读取抖音Cookie"
