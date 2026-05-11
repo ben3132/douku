@@ -1,3 +1,89 @@
+﻿# 抖库 (DouKu)
+
+> 抖音点赞数据分类工具 — 从自己的点赞列表提取结构化信息，支持内容分类、UP主画像、视频下载。
+
+---
+
+## 🚀 v4 推荐使用（16 表架构，WAL 并发模式）
+
+**v4 是当前推荐版本**，基于 16 张表分层设计，支持高并发读写，提供更完善的数据分析和报告功能。
+
+### v4 快速开始
+
+```bash
+# 首次初始化（建库建表）
+python dytool_v4.py init
+
+# 重新获取 Cookie（浏览器扫码）
+python dytool_v4.py cookie
+
+# 抓取点赞视频数据
+python dytool_v4.py fetch likes
+
+# 抓取收藏视频数据
+python dytool_v4.py fetch favorites
+
+# 抓取 UP主资料
+python dytool_v4.py fetch profiles
+
+# 抓取评论（支持预估 API 消耗）
+python dytool_v4.py fetch comments
+
+# 内容分类（17 类）
+python dytool_v4.py classify
+
+# 生成交互式 HTML 报告
+python dytool_v4.py report
+
+# 查看统计摘要
+python dytool_v4.py info
+
+# 完整性检查
+python dytool_v4.py check
+
+# 视频下载
+python dytool_v4.py download --limit 50
+
+# 刷新过期视频 URL
+python dytool_v4.py refresh
+```
+
+### v4 架构说明
+
+| 特性 | v3 | v4 |
+|------|----|----|
+| 表数量 | 3 张 | **16 张** |
+| 并发模式 | 默认 | **WAL**（读不阻塞写） |
+| 下载状态 | 0/1 | **5 态状态机** |
+| 断点续传 | cursor | **cursor + liked_time 书签** |
+| 分类体系 | 17 类 | **17 类 + 赛道分层** |
+| 评论标签 | 基础 | **多标签** |
+| UP主画像 | 基础 | **多维画像** |
+| 分析决策 | 盲跑 | **预估 API 消耗** |
+
+### v4 数据库结构
+
+```
+data/douku_v4.db
+├── videos_base          # 视频基本信息
+├── videos_stats         # 视频动态数据（点赞/评论/分享）
+├── videos_classification  # 17 类内容分类
+├── videos_download      # 下载状态机（5 态）
+├── videos_url           # 多 Tier URL 管理
+├── authors_base         # UP主基础信息
+├── authors_portrait     # UP主画像（多维度）
+├── comments             # 视频评论
+├── comment_tags         # 评论标签
+├── bookmarks_base       # 收藏夹基础
+├── bookmarks_items      # 收藏视频关联
+├── auth_state           # Cookie 状态管理
+└── ...                  # 迁移日志/操作记录等
+```
+
+---
+
+## v3（经典版）
+
 # 抖库 (DouKu)
 
 > 抖音点赞数据分类工具 — 从自己的点赞列表提取结构化信息，支持内容分类、UP主画像、视频下载。
@@ -226,3 +312,4 @@ MIT License - 自由使用，商用需保留版权声明。
 ---
 
 *如果对你有帮助，欢迎 Star ⭐*
+
