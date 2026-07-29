@@ -1,315 +1,189 @@
-﻿# 抖库 (DouKu)
+# DouKU 2.1
 
-> 抖音点赞数据分类工具 — 从自己的点赞列表提取结构化信息，支持内容分类、UP主画像、视频下载。
+DouKU 用于归档和整理当前登录账号自己的抖音数据。它不提供公开搜索、
+批量账号爬取或绕过登录功能。
 
----
+## 能力范围
 
-## 🚀 v4 推荐使用（16 表架构，WAL 并发模式）
+- 扫码登录并保存浏览器登录态
+- 采集自己的点赞和收藏
+- 补全视频详情、播放地址和近期视频评论
+- 记录数据来源，重复运行时更新而不是重复插入
+- 规则分类、按分类下载、生成本地 HTML 报告
+- MySQL 8.0 分层存储，按更新频率拆表并针对 1 万条以上视频建立索引
 
-**v4 是当前推荐版本**，基于 16 张表分层设计，支持高并发读写，提供更完善的数据分析和报告功能。
+抖音 Web 接口属于站点内部接口，可能随时调整。本项目把接口配置集中在
+`lib/collector.py`，遇到变化时只需更新该模块。
 
-### v4 快速开始
+## 环境
 
-```bash
-# 首次初始化（建库建表）
-python dytool_v4.py init
+- Windows 10/11
+- Python 3.10+
+- Microsoft Edge 或 Playwright Chromium
+- 可正常访问抖音的国内网络
 
-# 重新获取 Cookie（浏览器扫码）
-python dytool_v4.py cookie
-
-# 抓取点赞视频数据
-python dytool_v4.py fetch likes
-
-# 抓取收藏视频数据
-python dytool_v4.py fetch favorites
-
-# 抓取 UP主资料
-python dytool_v4.py fetch profiles
-
-# 抓取评论（支持预估 API 消耗）
-python dytool_v4.py fetch comments
-
-# 内容分类（17 类）
-python dytool_v4.py classify
-
-# 生成交互式 HTML 报告
-python dytool_v4.py report
-
-# 查看统计摘要
-python dytool_v4.py info
-
-# 完整性检查
-python dytool_v4.py check
-
-# 视频下载
-python dytool_v4.py download --limit 50
-
-# 刷新过期视频 URL
-python dytool_v4.py refresh
-```
-
-### v4 架构说明
-
-| 特性 | v3 | v4 |
-|------|----|----|
-| 表数量 | 3 张 | **16 张** |
-| 并发模式 | 默认 | **WAL**（读不阻塞写） |
-| 下载状态 | 0/1 | **5 态状态机** |
-| 断点续传 | cursor | **cursor + liked_time 书签** |
-| 分类体系 | 17 类 | **17 类 + 赛道分层** |
-| 评论标签 | 基础 | **多标签** |
-| UP主画像 | 基础 | **多维画像** |
-| 分析决策 | 盲跑 | **预估 API 消耗** |
-
-### v4 数据库结构
-
-```
-data/douku_v4.db
-├── videos_base          # 视频基本信息
-├── videos_stats         # 视频动态数据（点赞/评论/分享）
-├── videos_classification  # 17 类内容分类
-├── videos_download      # 下载状态机（5 态）
-├── videos_url           # 多 Tier URL 管理
-├── authors_base         # UP主基础信息
-├── authors_portrait     # UP主画像（多维度）
-├── comments             # 视频评论
-├── comment_tags         # 评论标签
-├── bookmarks_base       # 收藏夹基础
-├── bookmarks_items      # 收藏视频关联
-├── auth_state           # Cookie 状态管理
-└── ...                  # 迁移日志/操作记录等
-```
-
----
-
-## v3（经典版）
-
-# 抖库 (DouKu)
-
-> 抖音点赞数据分类工具 — 从自己的点赞列表提取结构化信息，支持内容分类、UP主画像、视频下载。
-
-[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-
-**这是一个开源工具模板，不包含任何用户数据。**
-
----
-
-## ⚠️ 免责声明 / Disclaimer
-
-1. 本项目（抖库）为**个人学习研究**用途开发，仅供学习交流使用
-2. **严禁**用于任何商业用途
-3. **严禁**用于以下行为：
-   - 爬取他人隐私数据
-   - 批量抓取对平台造成压力
-   - 违反《抖音用户服务协议》的任何行为
-   - 违反《中华人民共和国网络安全法》《数据安全法》《个人信息保护法》等法律法规的行为
-   - 任何其他违法行为
-4. 使用本工具即表示你已阅读并同意：**使用者需自行承担全部法律风险和责任，作者不承担任何连带责任**
-5. 本项目不提供任何明示或暗示的担保，包括但不限于适销性和特定用途的适用性
-6. 如果你是抖音平台方，认为本项目侵犯了你的权益，请联系作者删除
-
----
-
-## 核心功能
-
-| # | 功能 | 状态 | 说明 |
-|---|------|:----:|------|
-| 1 | 点赞列表同步 | ✅ | SQLite 持久化，支持增量续爬 |
-| 2 | 收藏列表同步 | ✅ | 同上 |
-| 3 | 评论抓取（热评） | ✅ | 默认按热度排序，每视频 1 页 20 条 |
-| 4 | UP主信息补全 | ✅ | 通过视频详情 API 批量更新 |
-| 5 | 视频内容分类 | ✅ | 双层引擎（官方标签映射 + 关键词推断），17 个分类 |
-| 6 | 分层数据刷新 | ✅ | Tier1(URL) / Tier2(动态) / Tier3(UP主) |
-| 7 | 视频下载 | ✅ | 按分类/UP主/标签筛选，下载前自动刷新 URL |
-| 8 | HTML 报告生成 | ✅ | 交互式筛选 + 分组统计 |
-
----
-
-## 参考项目 / Acknowledgements
-
-本项目开发过程中参考了以下开源项目，感谢它们的贡献：
-
-| 项目 | 说明 |
-|------|------|
-| [Johnserf-Seed/f2](https://github.com/Johnserf-Seed/f2) | 抖音 API 调用模式、a_bogus 签名算法、请求构造思路 |
-| [Johnserf-Seed/TikTokDownload](https://github.com/Johnserf-Seed/TikTokDownload) | 早期项目架构参考 |
-| [douyin-downloader](https://gitcode.com/GitHub_Trending/do/douyin-downloader) | 加权关键词分类方案（分类器设计参考） |
-| [zcx2077/abogus](https://github.com/zcx2077/-abogus-a_bogus-ttwid-req_sign-bd_ticket_guard_client_data-sig3-) | a_bogus 签名算法实现 |
-| [microsoft/playwright](https://github.com/microsoft/playwright) | 自动化 Cookie 获取方案 |
-
----
-
-## 安装与配置
-
-### 环境要求
-
-- Python 3.8+
-- Windows / macOS / Linux
-- Edge / Chrome 浏览器（用于自动获取 Cookie）
-
-### 安装
-
-```bash
-git clone <repo>
-cd douyin-likes-parser
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### 配置 Cookie（自动化）
+把公开配置模板复制到当前 Windows 用户的应用配置目录，并按本机情况修改
+数据目录和 MySQL 路径：
 
-运行脚本，自动打开浏览器扫码登录，Cookie 自动写入配置文件：
-
-```bash
-python -m modules.playwright_cookie
+```powershell
+$configDir = Join-Path $env:LOCALAPPDATA "DouKU"
+New-Item -ItemType Directory -Force $configDir
+Copy-Item douku_config.example.json (Join-Path $configDir "config.json")
 ```
 
-完成后验证：
+也可以通过 `DOUKU_CONFIG` 指定其他配置文件位置。用户配置始终放在项目目录
+之外，避免提交或打包源码时携带个人路径。
 
-```bash
-python dytool.py stats
+机器上有 Edge 时无需下载浏览器。若没有：
+
+```powershell
+python -m playwright install chromium
 ```
 
----
+可通过环境变量指定 Chrome：
 
-## 快速开始
-
-### 首次配置
-
-```bash
-# 自动获取 Cookie（浏览器自动弹出，扫码登录）
-python -m modules.playwright_cookie
+```powershell
+$env:DOUKU_BROWSER_CHANNEL = "chrome"
 ```
 
-### 同步数据
+## 使用
 
-```bash
-# 同步点赞列表
-python dytool.py fetch likes
+项目使用 MySQL 8.0。请先创建 `douku` 数据库和仅操作该库的应用账号，然后
+把连接信息保存到数据目录的 `private/mysql.json`。可以复制模板：
 
-# 同步收藏列表
-python dytool.py fetch favorites
-
-# 抓取评论（热评）
-python dytool.py fetch comments
-
-# 补全 UP主信息
-python dytool.py fetch profiles
+```powershell
+New-Item -ItemType Directory -Force D:\DouKUData\private
+Copy-Item mysql.example.json D:\DouKUData\private\mysql.json
 ```
 
-### 分类与下载
+修改其中的数据库密码后再初始化：
 
-```bash
-# 运行内容分类器
-python dytool.py classify
+```powershell
+# 初始化/升级数据库
+python douku.py init
 
-# 下载视频（按分类）
-python dytool.py download --tag 颜值 --limit 10
+# 首次扫码登录；自动创建 private/edge_profile 专用 Edge 用户目录
+python douku.py login
 
-# 下载视频（按 UP主）
-python dytool.py download --author 琪琳 --limit 5
+# 检查数据和登录态
+python douku.py status
+
+# 一次采集主要数据；默认每类 3 页，评论和详情各 20 个视频
+python douku.py fetch all
+
+# 也可以分别采集
+python douku.py fetch favorites --pages 10
+python douku.py fetch likes --pages 10
+python douku.py fetch details --limit 100
+python douku.py fetch comments --limit 50
+
+python douku.py classify
+python douku.py download --limit 20
+python douku.py report
+python douku.py check
 ```
 
-### 查看报告
+`login` 使用 DouKU 专用的 Edge 持久化用户目录。用户只需在该窗口登录一次，
+后续 Cookie、Local Storage 和设备会话由 Edge 自动维护。原有
+`private/douyin_state.json` 会在首次运行时自动导入，并继续作为状态备份。
+项目不会读取或修改用户日常 Edge 的主配置目录。
 
-```bash
-# 生成 HTML 报告
-python dytool.py report
+`fetch` 默认显示浏览器窗口，这是当前抖音 Web 端更可靠的方式。确认账号
+环境稳定后可增加 `--headless` 在后台运行，但无头模式更容易触发空白页或
+验证。
 
-# 查看统计
-python dytool.py stats
+## 数据与隐私
+
+本机数据目录由 `%LOCALAPPDATA%\DouKU\config.json`、
+`DOUKU_DATA_DIR` 环境变量或 `--data-dir` 参数配置。例如
+`D:\DouKUData`：
+
+- `mysql/data/`：DouKU 专用 MySQL 8.0 实例数据
+- `private/mysql.json`：MySQL 应用账号配置
+- `private/douyin_state.json`：浏览器登录态
+- `private/edge_profile/`：DouKU 专用 Edge 持久化用户目录
+- `downloads/`：视频
+- `output/report.html`：报告
+
+下载内容按数据类型集中存放，文件名使用
+`五位内部编号_作者_文案摘要`。编号来自 `videos_base.file_code`，数据库仍以
+完整 `aweme_id` 关联，避免截断抖音作品 ID 产生冲突：
+
+```text
+downloads/
+├── videos/
+│   └── 00017_作者名_周末家常菜.mp4
+├── covers/
+│   └── 00017_作者名_周末家常菜.jpg
+└── image_posts/
+    ├── covers/
+    │   └── 00018_作者名_旅行记录.jpg
+    ├── images/
+    │   ├── 00018_作者名_旅行记录_01.jpg
+    │   └── 00018_作者名_旅行记录_02.webp
+    └── music/
+        └── 00018_作者名_旅行记录.mp3
 ```
 
-### 分层刷新
+编号固定显示为五位，范围为 `00001`—`99999`；作者最多 16 个字符，
+文案摘要最多 32 个字符，Windows 禁用字符会自动替换。视频作品与图文作品
+使用完全独立的目录；同一图文作品的封面、原图和背景音乐共用文件名主体，
+原图再追加顺序号。图文接口返回的背景音乐不会再误存为 `.mp4`。不再生成
+每视频 JSON 或文件索引。
+所有关联统一由 MySQL 的 `aweme_id` 维护：
 
-```bash
-# Tier1: 下载 URL（每次下载前）
-python dytool.py refresh --tier 1
+| 更新频率 | 表 | 用途 |
+|---|---|---|
+| 低频 | `videos_base`、`authors_base` | 视频与作者基础信息 |
+| 中频 | `videos_stats`、`authors_stats` | 点赞、评论、粉丝等统计 |
+| 高频 | `video_urls` | 视频、封面、音乐 URL 及刷新状态 |
+| 高频 | `download_tasks` | 下载队列、重试、错误和本地视频路径 |
+| 按次写入 | `video_sources` | 点赞/收藏来源、采集时间和列表顺序 |
+| 按资源 | `media_assets` | 封面、图文、背景音乐 URL、序号和本地路径 |
+| 大文本 | `comments` | 评论内容 |
+| 低频 | `videos_classification` | 内容分类 |
 
-# Tier2: 视频动态数据（点赞/评论/标签）
-python dytool.py refresh --tier 2
+关键队列均有组合索引，例如来源顺序
+`(source, captured_at, position_no)`、下载队列
+`(status, priority, updated_at)` 和 URL 刷新队列
+`(url_status, refreshed_at)`。1 万视频规模无需扫描全表。
 
-# Tier3: UP主画像（粉丝数等）
-python dytool.py refresh --tier 3
+建议 MySQL 仅监听 `127.0.0.1`。程序优先连接已经运行的 MySQL；使用独立
+实例时，可通过 `DOUKU_MYSQLD` 或用户配置文件的 `mysqld_path`
+指定启动程序，并在数据目录提供 `mysql/my.ini`。
+
+认证文件和数据目录均已加入 `.gitignore`。不要把
+`private/douyin_state.json` 或 `private/mysql.json` 发给他人。
+
+可以使用外置数据目录：
+
+```powershell
+python douku.py --data-dir D:\DouKUData status
 ```
 
----
+或设置 `DOUKU_DATA_DIR` 环境变量。
 
-## 项目结构
+## 发布与隐私
 
-```
-douyin-likes-parser/
-├── dytool.py              # CLI 统一入口
-├── requirements.txt       # 依赖
-├── README.md              # 本文档
-├── config.py              # 配置文件（自动生成）
-├── modules/
-│   ├── __init__.py
-│   ├── config.py              # 配置加载
-│   ├── db_utils.py            # SQLite 工具
-│   ├── playwright_cookie.py   # Cookie 自动获取
-│   ├── fetch_likes_db.py      # 点赞抓取
-│   ├── fetch_favorites_db.py  # 收藏抓取
-│   ├── fetch_comments.py      # 评论抓取
-│   ├── fetch_up_profiles.py   # UP主信息
-│   ├── download_videos.py     # 视频下载
-│   ├── refresh_data.py        # 分层刷新
-│   ├── refresh_urls.py        # URL 刷新
-│   ├── content_classifier.py  # 内容分类
-│   ├── comment_tagger.py      # 评论标签
-│   ├── author_portrait.py     # UP主画像
-│   └── generate_report.py     # 报告生成
-└── data/
-    ├── likes.db               # SQLite 数据库
-    └── downloads/             # 下载视频目录
-```
+以下内容只保存在用户本机，均被 `.gitignore` 排除：
 
-### 模块说明
+- `%LOCALAPPDATA%\DouKU\config.json`
+- `data/` 和外置数据目录
+- `private/mysql.json`
+- `private/douyin_state.json`
+- `private/edge_profile/`
+- MySQL 数据、日志、下载媒体和本地报告
 
-| 模块 | 功能 |
-|------|------|
-| dytool.py | CLI 统一入口，子命令：fetch/download/refresh/classify/report/stats |
-| db_utils.py | 数据库初始化、迁移、辅助函数 |
-| fetch_* | 抓取点赞/收藏/评论/UP主信息 |
-| download_videos.py | 视频下载，支持 --tag/--author/--limit |
-| refresh_data.py | 分层刷新机制（Tier1/2/3） |
-| content_classifier.py | 视频内容分类（17类） |
-| generate_report.py | HTML 交互式报告生成 |
+不要提交现有项目的旧 Git 历史；旧历史可能包含早期登录文件。公开发布时应
+从当前清理后的文件重新初始化一个全新的 Git 仓库。
 
----
+## 使用边界
 
-## 常见问题
-
-### Q: Cookie 过期怎么办？
-A: 重新运行 `python -m modules.playwright_cookie` 扫码登录
-
-### Q: 下载失败怎么办？
-A: 使用 `--refresh` 自动刷新 URL，或手动运行 `python dytool.py refresh`
-
-### Q: 如何查看数据统计？
-A: `python dytool.py stats`
-
-### Q: 视频无法下载？
-A: 检查是否被UP主设置"禁止下载"，这类视频 API 不返回下载链接
-
----
-
-## 数据说明
-
-本项目获取的数据为用户授权公开信息，包括：
-- 您点赞/收藏的视频基本信息
-- 视频公开评论
-- UP主公开主页信息
-
-请勿将数据用于商业用途或二次传播。尊重创作者劳动成果。
-
----
-
-## 开源协议
-
-MIT License - 自由使用，商用需保留版权声明。
-
----
-
-*如果对你有帮助，欢迎 Star ⭐*
-
+仅采集本人账号中本人有权访问的数据，并控制采集频率。站点出现验证码、
+频率限制或权限提示时应停止采集，不应尝试绕过。

@@ -1,63 +1,24 @@
-﻿# OS
-.DS_Store
-Thumbs.db
-
-# Python
+data/
+test-data/
+private/
+downloads/
+output/
+logs/
+mysql/
+douyin_auth.json
+douku_config.json
+.cookie
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-.env
+*.py[cod]
 .venv/
 venv/
-env/
-
-# IDE
-.vscode/
+.env
+.pytest_cache/
 .idea/
-*.swp
-*.swo
-*~
-
-# 本地配置（包含 Cookie，切勿上传）
-modules/config.py
-modules/config_local.py
-modules/config_override.py
-.cookie
-.github_token
-
-# 数据文件
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.db-shm
-data/downloads/
-data/output/
-data/logs/
-data/temp/
-output/
-
-# v3 旧数据库
-data/likes.db
-data/likes.db-*
-data/favorites.db
-data/favorites.db-*
-
-# 测试报告
-test-reports/
-_htmlcov/
-.coverage
-*.log
-
-# 临时文件
-*.tmp
-*.bak
-_*.py
-_idatav_*
-diag.py
-test_classify.py
-
-# 签名算法（版权原因不上传）
-signer.js
-signer_worker.js
+.vscode/
+.DS_Store

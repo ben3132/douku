@@ -1,0 +1,7 @@
+{
+  "host": "127.0.0.1",
+  "port": 3307,
+  "database": "douku",
+  "user": "douku_app",
+  "password": "请替换为本机数据库密码"
+}
