@@ -1,3 +1,4 @@
 requests>=2.31,<3
 playwright>=1.45,<2
 mysql-connector-python>=9.0,<10
+yt-dlp>=2025.1,<2027

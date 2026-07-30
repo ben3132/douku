@@ -6,7 +6,7 @@ import html
 from pathlib import Path
 
 from lib.db.db_v4 import get_conn, get_summary, init_db
-from lib.utils.meta import get_output_dir
+from lib.utils.meta import get_account_key, get_output_dir
 
 
 def _table(headers: list[str], rows: list[list[object]]) -> str:
@@ -21,19 +21,27 @@ def _table(headers: list[str], rows: list[list[object]]) -> str:
 
 
 def generate_report(output_path: Path | None = None) -> Path:
-    output_path = output_path or get_output_dir() / "report.html"
+    account_key = get_account_key()
+    output_path = (
+        output_path
+        or get_output_dir() / "accounts" / account_key / "report.html"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         init_db(conn)
-        summary = get_summary(conn)
+        summary = get_summary(conn, account_key)
         categories = [
             list(row.values())
             for row in conn.execute(
                 """
-                SELECT COALESCE(content_category,'未分类'), COUNT(*)
-                FROM videos_classification
-                GROUP BY content_category ORDER BY COUNT(*) DESC
-                """
+                SELECT COALESCE(vc.content_category,'未分类'),
+                       COUNT(DISTINCT avs.aweme_id)
+                FROM account_video_sources avs
+                LEFT JOIN videos_classification vc ON vc.aweme_id=avs.aweme_id
+                WHERE avs.account_key=?
+                GROUP BY vc.content_category ORDER BY COUNT(*) DESC
+                """,
+                (account_key,),
             )
         ]
         authors = [
@@ -44,9 +52,14 @@ def generate_report(output_path: Path | None = None) -> Path:
                        COALESCE(SUM(vs.digg_count),0) AS likes
                 FROM authors_base ab
                 JOIN videos_base vb ON vb.author_sec_uid=ab.sec_uid
+                JOIN (
+                  SELECT DISTINCT aweme_id FROM account_video_sources
+                  WHERE account_key=?
+                ) avs ON avs.aweme_id=vb.aweme_id
                 LEFT JOIN videos_stats vs ON vs.aweme_id=vb.aweme_id
                 GROUP BY ab.sec_uid ORDER BY videos DESC LIMIT 50
-                """
+                """,
+                (account_key,),
             )
         ]
         videos = [
@@ -57,11 +70,16 @@ def generate_report(output_path: Path | None = None) -> Path:
                        COALESCE(vc.content_category,'未分类'),
                        COALESCE(vs.digg_count,0), vb.share_url
                 FROM videos_base vb
+                JOIN (
+                  SELECT DISTINCT aweme_id FROM account_video_sources
+                  WHERE account_key=?
+                ) avs ON avs.aweme_id=vb.aweme_id
                 JOIN authors_base ab ON ab.sec_uid=vb.author_sec_uid
                 LEFT JOIN videos_stats vs ON vs.aweme_id=vb.aweme_id
                 LEFT JOIN videos_classification vc ON vc.aweme_id=vb.aweme_id
                 ORDER BY vb.updated_at DESC LIMIT 200
-                """
+                """,
+                (account_key,),
             )
         ]
 

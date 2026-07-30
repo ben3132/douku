@@ -4,7 +4,7 @@ import unittest
 import os
 
 from lib.analysis.content_classifier import classify_one
-from lib.db.db_v4 import SCHEMA, check_database, get_conn, get_summary
+from lib.db.db_v4 import SCHEMA, check_database, get_conn, get_summary, init_db
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,7 +14,15 @@ from lib.download.download_videos import (
     _music_extension,
     media_stem,
 )
-from lib.utils.meta import get_browser_profile_dir
+from lib.link.resolver import detect_platform
+from lib.utils.meta import (
+    get_account_downloads_dir,
+    get_browser_profile_dir,
+    get_data_root,
+    migrate_legacy_default_downloads,
+    set_account,
+    set_data_dir,
+)
 
 
 class CoreTest(unittest.TestCase):
@@ -44,6 +52,9 @@ class CoreTest(unittest.TestCase):
         self.assertIn("idx_urls_status_refresh", schema)
         self.assertIn("file_code INT UNSIGNED NOT NULL AUTO_INCREMENT", schema)
         self.assertIn("ENUM('cover','image','music')", schema)
+        self.assertIn("account_download_tasks", schema)
+        self.assertIn("direct_download_jobs", schema)
+        self.assertIn("direct_media_urls", schema)
 
     def test_media_extension(self) -> None:
         self.assertEqual(_extension("https://x/a.webp?x=1", ".jpg"), ".webp")
@@ -71,12 +82,61 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(profile.name, "edge_profile")
         self.assertEqual(profile.parent.name, "private")
 
+    def test_account_downloads_are_isolated(self) -> None:
+        original_root = get_data_root()
+        try:
+            with TemporaryDirectory() as directory:
+                set_data_dir(directory)
+                set_account("账号 A")
+                first = get_account_downloads_dir()
+                set_account("账号 B")
+                second = get_account_downloads_dir()
+                self.assertNotEqual(first, second)
+                self.assertEqual(first.parent, second.parent)
+        finally:
+            set_account("default")
+            set_data_dir(original_root)
+
+    def test_platform_detection(self) -> None:
+        self.assertEqual(detect_platform("https://b23.tv/abc"), "bilibili")
+        self.assertEqual(
+            detect_platform("https://v.douyin.com/abc"), "douyin"
+        )
+        self.assertEqual(
+            detect_platform("https://www.example.com/watch/1"), "example"
+        )
+
+    def test_legacy_download_migration(self) -> None:
+        original_root = get_data_root()
+        try:
+            with TemporaryDirectory() as directory:
+                set_data_dir(directory)
+                legacy = get_data_root() / "downloads" / "videos" / "old.mp4"
+                legacy.parent.mkdir(parents=True, exist_ok=True)
+                legacy.write_bytes(b"video")
+                result = migrate_legacy_default_downloads()
+                migrated = (
+                    get_data_root()
+                    / "downloads"
+                    / "accounts"
+                    / "default"
+                    / "videos"
+                    / "old.mp4"
+                )
+                self.assertEqual(result["moved"], 1)
+                self.assertTrue(migrated.exists())
+                self.assertFalse(legacy.exists())
+        finally:
+            set_account("default")
+            set_data_dir(original_root)
+
     @unittest.skipUnless(
         os.environ.get("DOUKU_INTEGRATION_TESTS") == "1",
         "设置 DOUKU_INTEGRATION_TESTS=1 后运行本机 MySQL 集成测试",
     )
     def test_mysql_connection(self) -> None:
         with get_conn() as conn:
+            init_db(conn)
             health = check_database(conn)
             summary = get_summary(conn)
         self.assertEqual(health["connection"], "ok")

@@ -10,6 +10,8 @@ DouKU 用于归档和整理当前登录账号自己的抖音数据。它不提�
 - 补全视频详情、播放地址和近期视频评论
 - 记录数据来源，重复运行时更新而不是重复插入
 - 规则分类、按分类下载、生成本地 HTML 报告
+- 解析并下载抖音、B站及 yt-dlp 支持的其他公开链接
+- 按抖音账号隔离浏览器、任务和媒体目录
 - MySQL 8.0 分层存储，按更新频率拆表并针对 1 万条以上视频建立索引
 
 抖音 Web 接口属于站点内部接口，可能随时调整。本项目把接口配置集中在
@@ -27,6 +29,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+建议安装 FFmpeg 并在用户配置中设置 `ffmpeg_path`。B站等站点的高画质
+通常使用独立视频流和音频流，需要 FFmpeg 合并；未安装时会降级选择站点
+提供的最佳单文件格式。
 
 把公开配置模板复制到当前 Windows 用户的应用配置目录，并按本机情况修改
 数据目录和 MySQL 路径：
@@ -89,6 +95,38 @@ python douku.py report
 python douku.py check
 ```
 
+不同抖音账号使用不同本地别名。浏览器配置、采集来源、下载任务和媒体文件
+都会按别名隔离：
+
+```powershell
+python douku.py --account account_a login
+python douku.py --account account_a fetch all
+python douku.py --account account_a download --limit 100
+
+python douku.py --account account_b login
+python douku.py --account account_b fetch all
+python douku.py --account account_b download --limit 100
+```
+
+解析陌生链接并下载：
+
+```powershell
+# 单条或多条链接
+python douku.py link "https://v.douyin.com/..."
+python douku.py link "https://www.bilibili.com/video/BV..."
+
+# 每行一个链接
+python douku.py link --file links.txt
+
+# 只解析真实媒体 URL 并写入 MySQL，不下载
+python douku.py link --resolve-only "https://..."
+```
+
+通用链接解析由 yt-dlp Extractor 完成，解析结果先写入
+`direct_download_jobs` 和 `direct_media_urls`，下载文件再写入
+`direct_download_files`。抖音会使用当前 `--account` 对应的专用 Edge
+登录状态，但成品仍进入 `direct` 区，不与账号自动归档混放。
+
 `login` 使用 DouKU 专用的 Edge 持久化用户目录。用户只需在该窗口登录一次，
 后续 Cookie、Local Storage 和设备会话由 Edge 自动维护。原有
 `private/douyin_state.json` 会在首次运行时自动导入，并继续作为状态备份。
@@ -117,18 +155,22 @@ python douku.py check
 
 ```text
 downloads/
-├── videos/
-│   └── 00017_作者名_周末家常菜.mp4
-├── covers/
-│   └── 00017_作者名_周末家常菜.jpg
-└── image_posts/
-    ├── covers/
-    │   └── 00018_作者名_旅行记录.jpg
-    ├── images/
-    │   ├── 00018_作者名_旅行记录_01.jpg
-    │   └── 00018_作者名_旅行记录_02.webp
-    └── music/
-        └── 00018_作者名_旅行记录.mp3
+├── accounts/
+│   ├── account_a/
+│   │   ├── videos/
+│   │   ├── covers/
+│   │   └── image_posts/
+│   │       ├── covers/
+│   │       ├── images/
+│   │       └── music/
+│   └── account_b/
+│       └── ...
+└── direct/
+    ├── douyin/
+    │   └── D000004_文案摘要.mp4
+    ├── bilibili/
+    │   └── D000002_视频标题.mp4
+    └── 其他平台/
 ```
 
 编号固定显示为五位，范围为 `00001`—`99999`；作者最多 16 个字符，
@@ -146,6 +188,12 @@ downloads/
 | 高频 | `download_tasks` | 下载队列、重试、错误和本地视频路径 |
 | 按次写入 | `video_sources` | 点赞/收藏来源、采集时间和列表顺序 |
 | 按资源 | `media_assets` | 封面、图文、背景音乐 URL、序号和本地路径 |
+| 按账号 | `account_video_sources` | 不同抖音账号的点赞、收藏和详情来源 |
+| 按账号 | `account_download_tasks` | 各账号独立下载队列与视频路径 |
+| 按账号 | `account_media_files` | 各账号独立封面、图文和音乐路径 |
+| 通用链接 | `direct_download_jobs` | 陌生链接解析与下载任务 |
+| 通用链接 | `direct_media_urls` | 解析得到的真实视频、音频和清单 URL |
+| 通用链接 | `direct_download_files` | 陌生链接下载后的独立文件路径 |
 | 大文本 | `comments` | 评论内容 |
 | 低频 | `videos_classification` | 内容分类 |
 
@@ -186,4 +234,5 @@ python douku.py --data-dir D:\DouKUData status
 ## 使用边界
 
 仅采集本人账号中本人有权访问的数据，并控制采集频率。站点出现验证码、
-频率限制或权限提示时应停止采集，不应尝试绕过。
+频率限制或权限提示时应停止采集，不应尝试绕过。通用链接功能只应用于用户
+有权访问和保存的内容，不绕过 DRM、付费墙、登录权限或平台访问控制。

@@ -18,7 +18,7 @@ from lib.db.db_v4 import (
     upsert_comment,
 )
 from lib.utils.auth import extract_cookie, has_session, load_auth, save_auth
-from lib.utils.meta import get_browser_profile_dir
+from lib.utils.meta import get_account_key, get_browser_profile_dir
 
 HOME_URL = "https://www.douyin.com/"
 TAB_URL = "https://www.douyin.com/user/self?showTab=favorite_collection"
@@ -118,7 +118,11 @@ def _list_items(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _collect_tabs(
-    page: Any, conn: Any, wanted: set[str], max_pages: int
+    page: Any,
+    conn: Any,
+    wanted: set[str],
+    max_pages: int,
+    account_key: str,
 ) -> tuple[dict[str, dict[str, int]], str]:
     # 个人页经常预加载相邻标签；全部接收可减少重复打开浏览器触发风控。
     results = {
@@ -154,11 +158,18 @@ def _collect_tabs(
                         item,
                         source,
                         position=page_offset + item_position,
+                        account_key=account_key,
                     )
                 )
             results[source]["pages"] += 1
             cursor = data.get("cursor") or data.get("max_cursor") or "0"
-            set_bookmark(conn, source, str(cursor), len(items))
+            set_bookmark(
+                conn,
+                source,
+                str(cursor),
+                len(items),
+                account_key=account_key,
+            )
             conn.commit()
         except Exception as exc:
             errors.append(f"{source}: {exc}")
@@ -199,26 +210,46 @@ def _collect_tabs(
     return selected, account_sec_uid
 
 
-def _candidate_ids(conn: Any, limit: int, missing_url: bool = False) -> list[str]:
+def _candidate_ids(
+    conn: Any,
+    account_key: str,
+    limit: int,
+    missing_url: bool = False,
+) -> list[str]:
     query = """
         SELECT vb.aweme_id
         FROM videos_base vb
+        JOIN account_video_sources avs ON avs.aweme_id=vb.aweme_id
         LEFT JOIN video_urls vu ON vu.aweme_id=vb.aweme_id
+        WHERE avs.account_key=?
     """
     if missing_url:
-        query += " WHERE COALESCE(vu.video_url,'')='' "
-    query += " ORDER BY vb.updated_at DESC LIMIT ?"
-    return [row["aweme_id"] for row in conn.execute(query, (limit,))]
+        query += " AND COALESCE(vu.video_url,'')='' "
+    query += " GROUP BY vb.aweme_id ORDER BY MAX(vb.updated_at) DESC LIMIT ?"
+    return [
+        row["aweme_id"]
+        for row in conn.execute(query, (account_key, limit))
+    ]
 
 
 def _fetch_video_pages(
-    page: Any, conn: Any, limit: int, want_details: bool, want_comments: bool
+    page: Any,
+    conn: Any,
+    account_key: str,
+    limit: int,
+    want_details: bool,
+    want_comments: bool,
 ) -> dict[str, dict[str, int]]:
     results = {
         "details": {"saved": 0, "failed": 0},
         "comments": {"saved": 0, "failed_videos": 0},
     }
-    ids = _candidate_ids(conn, limit, missing_url=want_details and not want_comments)
+    ids = _candidate_ids(
+        conn,
+        account_key,
+        limit,
+        missing_url=want_details and not want_comments,
+    )
     for aweme_id in ids:
         seen_detail = False
         seen_comments = False
@@ -232,7 +263,12 @@ def _fetch_video_pages(
                     item = data.get("aweme_detail") or data.get("aweme") or {}
                     if item:
                         results["details"]["saved"] += int(
-                            upsert_aweme(conn, item, "details")
+                            upsert_aweme(
+                                conn,
+                                item,
+                                "details",
+                                account_key=account_key,
+                            )
                         )
                         seen_detail = True
                 if want_comments and path.endswith("/aweme/v1/web/comment/list/"):
@@ -277,6 +313,7 @@ def collect(
         else [source]
     )
     results: dict[str, Any] = {}
+    account_key = get_account_key()
     with sync_playwright() as playwright:
         context = _launch_persistent_context(playwright, headless=headless)
         _restore_auth_backup(context)
@@ -299,16 +336,29 @@ def collect(
             list_tasks = {task for task in tasks if task in {"favorites", "likes"}}
             if list_tasks:
                 tab_results, discovered_sec_uid = _collect_tabs(
-                    page, conn, list_tasks, max_pages
+                    page, conn, list_tasks, max_pages, account_key
                 )
                 results.update(tab_results)
                 if discovered_sec_uid:
                     sec_user_id = discovered_sec_uid
+                    conn.execute(
+                        """
+                        UPDATE account_profiles
+                        SET platform_user_id=?,updated_at=?
+                        WHERE account_key=?
+                        """,
+                        (
+                            discovered_sec_uid,
+                            time.strftime("%Y-%m-%d %H:%M:%S"),
+                            account_key,
+                        ),
+                    )
             page_tasks = {task for task in tasks if task in {"details", "comments"}}
             if page_tasks:
                 page_results = _fetch_video_pages(
                     page,
                     conn,
+                    account_key,
                     limit,
                     want_details="details" in page_tasks,
                     want_comments="comments" in page_tasks,

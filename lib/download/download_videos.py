@@ -19,7 +19,7 @@ from lib.db.db_v4 import (
     update_download_status,
 )
 from lib.utils.auth import load_auth
-from lib.utils.meta import get_downloads_dir
+from lib.utils.meta import get_account_downloads_dir, get_account_key
 
 
 def _cookie_dict() -> dict[str, str]:
@@ -32,6 +32,7 @@ def _cookie_dict() -> dict[str, str]:
 
 def _queue(
     conn: Any,
+    account_key: str,
     category: str,
     author: str,
     limit: int,
@@ -52,7 +53,8 @@ def _queue(
                COALESCE(vc.content_category,'未分类') AS category
         FROM videos_base vb
         JOIN authors_base ab ON ab.sec_uid=vb.author_sec_uid
-        JOIN download_tasks vd ON vd.aweme_id=vb.aweme_id
+        JOIN account_download_tasks vd ON vd.aweme_id=vb.aweme_id
+          AND vd.account_key=?
         LEFT JOIN video_urls vu ON vu.aweme_id=vb.aweme_id
         LEFT JOIN videos_classification vc ON vc.aweme_id=vb.aweme_id
         WHERE vd.status IN ({placeholders})
@@ -64,7 +66,7 @@ def _queue(
             )
           )
     """
-    params: list[Any] = list(statuses)
+    params: list[Any] = [account_key, *statuses]
     if category:
         query += " AND vc.content_category=?"
         params.append(category)
@@ -160,10 +162,13 @@ def _download_url(
 
 
 def _download_one(
-    conn: Any, row: dict[str, Any], session: requests.Session
+    conn: Any,
+    row: dict[str, Any],
+    session: requests.Session,
+    account_key: str,
 ) -> bool:
     aweme_id = row["aweme_id"]
-    root = get_downloads_dir()
+    root = get_account_downloads_dir(account_key)
     video_dir = root / "videos"
     is_image_post = row.get("type") == "image"
     if is_image_post:
@@ -186,14 +191,16 @@ def _download_one(
     else:
         saved_asset = conn.execute(
             """
-            SELECT asset_type,position_no,local_path
-            FROM media_assets
-            WHERE aweme_id=? AND local_path!=''
-            ORDER BY CASE asset_type
+            SELECT ma.asset_type,ma.position_no,amf.local_path
+            FROM media_assets ma
+            JOIN account_media_files amf ON amf.media_asset_id=ma.id
+              AND amf.account_key=?
+            WHERE ma.aweme_id=? AND amf.local_path!=''
+            ORDER BY CASE ma.asset_type
               WHEN 'cover' THEN 0 WHEN 'image' THEN 1 ELSE 2 END,position_no
             LIMIT 1
             """,
-            (aweme_id,),
+            (account_key, aweme_id),
         ).fetchone()
         stem = ""
         if saved_asset:
@@ -230,12 +237,18 @@ def _download_one(
         dict(asset)
         for asset in conn.execute(
             """
-            SELECT id,asset_type,position_no,remote_url,local_path,status,download_error
-            FROM media_assets WHERE aweme_id=?
-            ORDER BY CASE asset_type
+            SELECT ma.id,ma.asset_type,ma.position_no,ma.remote_url,
+                   COALESCE(amf.local_path,'') AS local_path,
+                   COALESCE(amf.status,0) AS status,
+                   COALESCE(amf.download_error,'') AS download_error
+            FROM media_assets ma
+            LEFT JOIN account_media_files amf ON amf.media_asset_id=ma.id
+              AND amf.account_key=?
+            WHERE ma.aweme_id=?
+            ORDER BY CASE ma.asset_type
               WHEN 'cover' THEN 0 WHEN 'image' THEN 1 ELSE 2 END, position_no
             """,
-            (aweme_id,),
+            (account_key, aweme_id),
         )
     ]
     for asset in assets:
@@ -267,11 +280,21 @@ def _download_one(
             )
         conn.execute(
             """
-            UPDATE media_assets
-            SET local_path=?,status=?,download_error=?,updated_at=?
-            WHERE id=?
+            INSERT INTO account_media_files
+              (account_key,media_asset_id,local_path,status,download_error,updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON DUPLICATE KEY UPDATE local_path=VALUES(local_path),
+              status=VALUES(status),download_error=VALUES(download_error),
+              updated_at=VALUES(updated_at)
             """,
-            (str(target) if ok else "", 2 if ok else 3, error, now(), asset["id"]),
+            (
+                account_key,
+                asset["id"],
+                str(target) if ok else "",
+                2 if ok else 3,
+                error,
+                now(),
+            ),
         )
         asset.update(
             {
@@ -287,8 +310,11 @@ def _download_one(
     if failures:
         if is_image_post:
             conn.execute(
-                "UPDATE download_tasks SET video_path='' WHERE aweme_id=?",
-                (aweme_id,),
+                """
+                UPDATE account_download_tasks SET video_path=''
+                WHERE account_key=? AND aweme_id=?
+                """,
+                (account_key, aweme_id),
             )
         update_download_status(
             conn,
@@ -300,12 +326,16 @@ def _download_one(
                 else ""
             ),
             error="; ".join(failures),
+            account_key=account_key,
         )
         return False
     if is_image_post:
         conn.execute(
-            "UPDATE download_tasks SET video_path='' WHERE aweme_id=?",
-            (aweme_id,),
+            """
+            UPDATE account_download_tasks SET video_path=''
+            WHERE account_key=? AND aweme_id=?
+            """,
+            (account_key, aweme_id),
         )
     update_download_status(
         conn,
@@ -314,6 +344,7 @@ def _download_one(
         str(video_target)
         if not is_image_post and video_target.exists()
         else "",
+        account_key=account_key,
     )
     return True
 
@@ -338,10 +369,18 @@ def run(
     success = failed = 0
     with get_conn() as conn:
         init_db(conn)
-        queue = _queue(conn, category, author, limit, retry_failed)
+        account_key = get_account_key()
+        queue = _queue(
+            conn,
+            account_key,
+            category,
+            author,
+            limit,
+            retry_failed,
+        )
         for index, row in enumerate(queue, 1):
             print(f"[{index}/{len(queue)}] {row['nickname']} - {row['desc'][:40]}")
-            if _download_one(conn, row, session):
+            if _download_one(conn, row, session, account_key):
                 success += 1
             else:
                 failed += 1
@@ -367,8 +406,10 @@ def download_ids(aweme_ids: list[str]) -> dict[str, int]:
     success = failed = 0
     with get_conn() as conn:
         init_db(conn)
+        account_key = get_account_key()
         queue = _queue(
             conn,
+            account_key,
             category="",
             author="",
             limit=len(aweme_ids),
@@ -382,7 +423,7 @@ def download_ids(aweme_ids: list[str]) -> dict[str, int]:
                 failed += 1
                 continue
             print(f"[{index}/{len(aweme_ids)}] {row['nickname']} - {row['desc'][:40]}")
-            if _download_one(conn, row, session):
+            if _download_one(conn, row, session, account_key):
                 success += 1
             else:
                 failed += 1

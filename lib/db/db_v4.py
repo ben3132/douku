@@ -187,6 +187,134 @@ SCHEMA = [
       updated_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    """
+    CREATE TABLE IF NOT EXISTS account_profiles (
+      account_key VARCHAR(80) PRIMARY KEY,
+      platform VARCHAR(32) NOT NULL DEFAULT 'douyin',
+      platform_user_id VARCHAR(255) NOT NULL DEFAULT '',
+      nickname VARCHAR(255) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX idx_account_platform_user (platform, platform_user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_video_sources (
+      account_key VARCHAR(80) NOT NULL,
+      aweme_id VARCHAR(32) NOT NULL,
+      source ENUM('likes','favorites','details') NOT NULL,
+      position_no INT UNSIGNED NOT NULL DEFAULT 0,
+      captured_at DATETIME NOT NULL,
+      PRIMARY KEY (account_key, aweme_id, source),
+      INDEX idx_account_source_order
+        (account_key, source, captured_at DESC, position_no ASC),
+      CONSTRAINT fk_account_source_profile FOREIGN KEY (account_key)
+        REFERENCES account_profiles(account_key) ON DELETE CASCADE,
+      CONSTRAINT fk_account_source_video FOREIGN KEY (aweme_id)
+        REFERENCES videos_base(aweme_id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_download_tasks (
+      account_key VARCHAR(80) NOT NULL,
+      aweme_id VARCHAR(32) NOT NULL,
+      status TINYINT NOT NULL DEFAULT 0,
+      priority SMALLINT NOT NULL DEFAULT 0,
+      downloaded_at DATETIME NULL,
+      video_path VARCHAR(1024) NOT NULL DEFAULT '',
+      download_error VARCHAR(1000) NOT NULL DEFAULT '',
+      retry_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+      next_retry_at DATETIME NULL,
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (account_key, aweme_id),
+      INDEX idx_account_download_queue
+        (account_key, status, priority DESC, updated_at),
+      CONSTRAINT fk_account_download_profile FOREIGN KEY (account_key)
+        REFERENCES account_profiles(account_key) ON DELETE CASCADE,
+      CONSTRAINT fk_account_download_video FOREIGN KEY (aweme_id)
+        REFERENCES videos_base(aweme_id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_media_files (
+      account_key VARCHAR(80) NOT NULL,
+      media_asset_id BIGINT UNSIGNED NOT NULL,
+      local_path VARCHAR(1024) NOT NULL DEFAULT '',
+      status TINYINT NOT NULL DEFAULT 0,
+      download_error VARCHAR(1000) NOT NULL DEFAULT '',
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (account_key, media_asset_id),
+      INDEX idx_account_media_status (account_key, status),
+      CONSTRAINT fk_account_media_profile FOREIGN KEY (account_key)
+        REFERENCES account_profiles(account_key) ON DELETE CASCADE,
+      CONSTRAINT fk_account_media_asset FOREIGN KEY (media_asset_id)
+        REFERENCES media_assets(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS account_sync_cursors (
+      account_key VARCHAR(80) NOT NULL,
+      source VARCHAR(32) NOT NULL,
+      last_cursor VARCHAR(255) NOT NULL DEFAULT '0',
+      total_fetched BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (account_key, source),
+      CONSTRAINT fk_account_cursor_profile FOREIGN KEY (account_key)
+        REFERENCES account_profiles(account_key) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS direct_download_jobs (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      input_url TEXT NOT NULL,
+      canonical_url TEXT,
+      platform VARCHAR(64) NOT NULL DEFAULT 'generic',
+      extractor VARCHAR(128) NOT NULL DEFAULT '',
+      content_id VARCHAR(255) NOT NULL DEFAULT '',
+      title VARCHAR(512) NOT NULL DEFAULT '',
+      uploader VARCHAR(255) NOT NULL DEFAULT '',
+      status TINYINT NOT NULL DEFAULT 0,
+      download_error VARCHAR(1000) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX idx_direct_jobs_status (status, updated_at),
+      INDEX idx_direct_jobs_platform (platform, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS direct_media_urls (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      job_id BIGINT UNSIGNED NOT NULL,
+      format_id VARCHAR(128) NOT NULL DEFAULT '',
+      media_role ENUM('combined','video','audio','manifest','thumbnail')
+        NOT NULL DEFAULT 'combined',
+      remote_url LONGTEXT NOT NULL,
+      protocol VARCHAR(32) NOT NULL DEFAULT '',
+      ext VARCHAR(16) NOT NULL DEFAULT '',
+      width INT UNSIGNED NULL,
+      height INT UNSIGNED NULL,
+      filesize BIGINT UNSIGNED NULL,
+      selected BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at DATETIME NOT NULL,
+      UNIQUE KEY uq_direct_format (job_id, format_id, media_role),
+      INDEX idx_direct_selected (job_id, selected, media_role),
+      CONSTRAINT fk_direct_url_job FOREIGN KEY (job_id)
+        REFERENCES direct_download_jobs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS direct_download_files (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      job_id BIGINT UNSIGNED NOT NULL,
+      file_type VARCHAR(32) NOT NULL DEFAULT 'media',
+      local_path VARCHAR(1024) NOT NULL,
+      file_size BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL,
+      UNIQUE KEY uq_direct_file (job_id, local_path(512)),
+      CONSTRAINT fk_direct_file_job FOREIGN KEY (job_id)
+        REFERENCES direct_download_jobs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 ]
 
 
@@ -355,6 +483,57 @@ def init_db(conn: Connection) -> None:
               MODIFY asset_type ENUM('cover','image','music') NOT NULL
             """
         )
+    timestamp = now()
+    conn.execute(
+        """
+        INSERT INTO account_profiles
+          (account_key,platform,platform_user_id,nickname,created_at,updated_at)
+        VALUES ('default','douyin','','',?,?)
+        ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at)
+        """,
+        (timestamp, timestamp),
+    )
+    legacy_sources = conn.execute(
+        """
+        SELECT COUNT(*) AS total FROM information_schema.tables
+        WHERE table_schema=DATABASE() AND table_name='video_sources'
+        """
+    ).fetchone()
+    if legacy_sources and int(legacy_sources["total"]):
+        conn.execute(
+            """
+            INSERT IGNORE INTO account_video_sources
+              (account_key,aweme_id,source,position_no,captured_at)
+            SELECT 'default',aweme_id,source,position_no,captured_at
+            FROM video_sources
+            """
+        )
+    legacy_downloads = conn.execute(
+        """
+        SELECT COUNT(*) AS total FROM information_schema.tables
+        WHERE table_schema=DATABASE() AND table_name='download_tasks'
+        """
+    ).fetchone()
+    if legacy_downloads and int(legacy_downloads["total"]):
+        conn.execute(
+            """
+            INSERT IGNORE INTO account_download_tasks
+              (account_key,aweme_id,status,priority,downloaded_at,video_path,
+               download_error,retry_count,next_retry_at,updated_at)
+            SELECT 'default',aweme_id,status,priority,downloaded_at,video_path,
+                   download_error,retry_count,next_retry_at,updated_at
+            FROM download_tasks
+            """
+        )
+        conn.execute(
+            """
+            INSERT IGNORE INTO account_media_files
+              (account_key,media_asset_id,local_path,status,download_error,updated_at)
+            SELECT 'default',id,local_path,status,download_error,updated_at
+            FROM media_assets
+            WHERE local_path!='' OR status!=0
+            """
+        )
     conn.commit()
 
 
@@ -363,6 +542,7 @@ def upsert_aweme(
     item: dict[str, Any],
     source: str,
     position: int = 0,
+    account_key: str = "default",
 ) -> bool:
     aweme_id = str(item.get("aweme_id") or "")
     if not aweme_id:
@@ -372,6 +552,15 @@ def upsert_aweme(
     video = item.get("video") or {}
     stats = item.get("statistics") or {}
     timestamp = now()
+    conn.execute(
+        """
+        INSERT INTO account_profiles
+          (account_key,platform,platform_user_id,nickname,created_at,updated_at)
+        VALUES (?,'douyin','','',?,?)
+        ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at)
+        """,
+        (account_key, timestamp, timestamp),
+    )
     avatar_urls = (author.get("avatar_thumb") or {}).get("url_list") or []
     conn.execute(
         """
@@ -439,12 +628,13 @@ def upsert_aweme(
     if source in {"likes", "favorites", "details"}:
         conn.execute(
             """
-            INSERT INTO video_sources (aweme_id,source,position_no,captured_at)
-            VALUES (?,?,?,?)
+            INSERT INTO account_video_sources
+              (account_key,aweme_id,source,position_no,captured_at)
+            VALUES (?,?,?,?,?)
             ON DUPLICATE KEY UPDATE position_no=VALUES(position_no),
               captured_at=VALUES(captured_at)
             """,
-            (aweme_id, source, position, timestamp),
+            (account_key, aweme_id, source, position, timestamp),
         )
     conn.execute(
         """
@@ -524,11 +714,12 @@ def upsert_aweme(
         )
     conn.execute(
         """
-        INSERT INTO download_tasks (aweme_id,status,updated_at)
-        VALUES (?,?,?)
+        INSERT INTO account_download_tasks
+          (account_key,aweme_id,status,updated_at)
+        VALUES (?,?,?,?)
         ON DUPLICATE KEY UPDATE aweme_id=VALUES(aweme_id)
         """,
-        (aweme_id, DL_PENDING, timestamp),
+        (account_key, aweme_id, DL_PENDING, timestamp),
     )
     return True
 
@@ -567,17 +758,22 @@ def upsert_comment(
 
 
 def set_bookmark(
-    conn: Connection, source: str, cursor: str, total_fetched: int
+    conn: Connection,
+    source: str,
+    cursor: str,
+    total_fetched: int,
+    account_key: str = "default",
 ) -> None:
     conn.execute(
         """
-        INSERT INTO sync_cursors(source,last_cursor,total_fetched,updated_at)
-        VALUES (?,?,?,?)
+        INSERT INTO account_sync_cursors
+          (account_key,source,last_cursor,total_fetched,updated_at)
+        VALUES (?,?,?,?,?)
         ON DUPLICATE KEY UPDATE last_cursor=VALUES(last_cursor),
           total_fetched=total_fetched+VALUES(total_fetched),
           updated_at=VALUES(updated_at)
         """,
-        (source, str(cursor), total_fetched, now()),
+        (account_key, source, str(cursor), total_fetched, now()),
     )
 
 
@@ -587,12 +783,14 @@ def update_download_status(
     status: int,
     download_path: str = "",
     error: str = "",
+    account_key: str = "default",
 ) -> None:
     conn.execute(
         """
-        INSERT INTO download_tasks
-          (aweme_id,status,downloaded_at,video_path,download_error,retry_count,updated_at)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO account_download_tasks
+          (account_key,aweme_id,status,downloaded_at,video_path,download_error,
+           retry_count,updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
         ON DUPLICATE KEY UPDATE status=VALUES(status),
           downloaded_at=IF(VALUES(status)=2,VALUES(downloaded_at),downloaded_at),
           video_path=IF(VALUES(video_path)!='',VALUES(video_path),video_path),
@@ -601,6 +799,7 @@ def update_download_status(
           updated_at=VALUES(updated_at)
         """,
         (
+            account_key,
             aweme_id,
             status,
             now() if status == DL_DONE else None,
@@ -617,24 +816,80 @@ def _scalar(conn: Connection, sql: str, params: Iterable[Any] = ()) -> int:
     return int(next(iter(row.values()))) if row else 0
 
 
-def get_summary(conn: Connection) -> dict[str, Any]:
+def get_summary(conn: Connection, account_key: str = "default") -> dict[str, Any]:
     return {
-        "videos": _scalar(conn, "SELECT COUNT(*) FROM videos_base"),
-        "authors": _scalar(conn, "SELECT COUNT(*) FROM authors_base"),
-        "comments": _scalar(conn, "SELECT COUNT(*) FROM comments"),
+        "videos": _scalar(
+            conn,
+            """
+            SELECT COUNT(DISTINCT aweme_id) FROM account_video_sources
+            WHERE account_key=?
+            """,
+            (account_key,),
+        ),
+        "authors": _scalar(
+            conn,
+            """
+            SELECT COUNT(DISTINCT vb.author_sec_uid)
+            FROM account_video_sources avs
+            JOIN videos_base vb ON vb.aweme_id=avs.aweme_id
+            WHERE avs.account_key=?
+            """,
+            (account_key,),
+        ),
+        "comments": _scalar(
+            conn,
+            """
+            SELECT COUNT(DISTINCT c.cid)
+            FROM comments c
+            JOIN account_video_sources avs ON avs.aweme_id=c.aweme_id
+            WHERE avs.account_key=?
+            """,
+            (account_key,),
+        ),
         "likes": _scalar(
-            conn, "SELECT COUNT(*) FROM video_sources WHERE source='likes'"
+            conn,
+            """
+            SELECT COUNT(*) FROM account_video_sources
+            WHERE account_key=? AND source='likes'
+            """,
+            (account_key,),
         ),
         "favorites": _scalar(
-            conn, "SELECT COUNT(*) FROM video_sources WHERE source='favorites'"
+            conn,
+            """
+            SELECT COUNT(*) FROM account_video_sources
+            WHERE account_key=? AND source='favorites'
+            """,
+            (account_key,),
         ),
         "with_video_url": _scalar(
-            conn, "SELECT COUNT(*) FROM video_urls WHERE video_url!=''"
+            conn,
+            """
+            SELECT COUNT(DISTINCT vu.aweme_id)
+            FROM video_urls vu
+            JOIN account_video_sources avs ON avs.aweme_id=vu.aweme_id
+            WHERE avs.account_key=? AND vu.video_url!=''
+            """,
+            (account_key,),
         ),
         "downloaded": _scalar(
-            conn, f"SELECT COUNT(*) FROM download_tasks WHERE status={DL_DONE}"
+            conn,
+            """
+            SELECT COUNT(*) FROM account_download_tasks
+            WHERE account_key=? AND status=?
+            """,
+            (account_key, DL_DONE),
         ),
-        "classified": _scalar(conn, "SELECT COUNT(*) FROM videos_classification"),
+        "classified": _scalar(
+            conn,
+            """
+            SELECT COUNT(DISTINCT vc.aweme_id)
+            FROM videos_classification vc
+            JOIN account_video_sources avs ON avs.aweme_id=vc.aweme_id
+            WHERE avs.account_key=?
+            """,
+            (account_key,),
+        ),
     }
 
 

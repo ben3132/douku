@@ -2,5 +2,6 @@
   "data_dir": "D:\\DouKUData",
   "database": "mysql",
   "mysql_port": 3307,
-  "mysqld_path": "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqld.exe"
+  "mysqld_path": "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqld.exe",
+  "ffmpeg_path": "C:\\ffmpeg\\bin"
 }
