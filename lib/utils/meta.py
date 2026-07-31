@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 _DATA_ROOT: Path | None = None
-_ACCOUNT_KEY = "default"
+_ACCOUNT_KEY = "auto"
 
 
 def get_project_root() -> Path:
@@ -52,12 +52,55 @@ def set_data_dir(data_dir: str | Path) -> Path:
 
 def set_account(account_key: str) -> str:
     global _ACCOUNT_KEY
-    _ACCOUNT_KEY = sanitize_dirname(account_key or "default")
+    _ACCOUNT_KEY = sanitize_dirname(account_key or "auto")
     return _ACCOUNT_KEY
 
 
 def get_account_key() -> str:
+    if _ACCOUNT_KEY == "auto":
+        path = get_data_root() / "private" / "active_account.json"
+        if path.exists():
+            try:
+                return sanitize_dirname(
+                    json.loads(path.read_text(encoding="utf-8")).get(
+                        "account_key", "default"
+                    )
+                )
+            except (OSError, ValueError):
+                pass
+        return "default"
     return _ACCOUNT_KEY
+
+
+def get_auth_store_key() -> str:
+    return "auto" if is_auto_account() else sanitize_dirname(_ACCOUNT_KEY)
+
+
+def is_auto_account() -> bool:
+    return _ACCOUNT_KEY == "auto"
+
+
+def remember_active_account(
+    account_key: str,
+    platform_user_id: str,
+    nickname: str,
+) -> Path:
+    path = get_data_root() / "private" / "active_account.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "account_key": sanitize_dirname(account_key),
+                "platform_user_id": platform_user_id,
+                "nickname": nickname,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def get_data_root() -> Path:
@@ -82,6 +125,8 @@ def ensure_directories(root: Path) -> Path:
 
 
 def get_auth_path() -> Path:
+    if is_auto_account():
+        return get_data_root() / "private" / "douyin_state.json"
     if get_account_key() != "default":
         path = (
             get_data_root()
@@ -99,7 +144,7 @@ def get_browser_profile_dir() -> Path:
     """DouKU 专用 Edge 用户目录，不与用户日常 Edge 配置混用。"""
     path = (
         get_data_root() / "private" / "edge_profile"
-        if get_account_key() == "default"
+        if is_auto_account() or get_account_key() == "default"
         else get_data_root()
         / "private"
         / "accounts"
@@ -129,6 +174,17 @@ def get_direct_downloads_dir(platform: str | None = None) -> Path:
     path = get_downloads_dir() / "direct"
     if platform:
         path /= sanitize_dirname(platform)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_creator_downloads_dir(platform: str, nickname: str) -> Path:
+    path = (
+        get_downloads_dir()
+        / "creators"
+        / sanitize_dirname(platform)
+        / sanitize_dirname(nickname)
+    )
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -190,7 +246,7 @@ def init_project(data_dir: str | Path | None = None) -> dict[str, Any]:
     meta_path = root / "project_meta.json"
     meta = {
         "name": "DouKU",
-        "version": "2.1",
+        "version": "2.2",
         "data_root": str(root),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }

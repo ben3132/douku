@@ -13,12 +13,18 @@ from typing import Any
 from lib.db.db_v4 import (
     get_conn,
     init_db,
+    resolve_account_profile,
     set_bookmark,
     upsert_aweme,
     upsert_comment,
 )
 from lib.utils.auth import extract_cookie, has_session, load_auth, save_auth
-from lib.utils.meta import get_account_key, get_browser_profile_dir
+from lib.utils.meta import (
+    get_account_key,
+    get_browser_profile_dir,
+    is_auto_account,
+    remember_active_account,
+)
 
 HOME_URL = "https://www.douyin.com/"
 TAB_URL = "https://www.douyin.com/user/self?showTab=favorite_collection"
@@ -56,10 +62,8 @@ def _launch_persistent_context(playwright: Any, headless: bool) -> Any:
 
 
 def _restore_auth_backup(context: Any) -> bool:
-    """仅在专用目录没有会话时导入旧 storage_state Cookie。"""
+    """Apply the encrypted canonical cookie state over stale browser cookies."""
     current = {"cookies": context.cookies(), "origins": []}
-    if has_session(current):
-        return False
     backup = load_auth()
     if not has_session(backup):
         return False
@@ -75,6 +79,49 @@ def _context_page(context: Any) -> Any:
     return pages[0] if pages else context.new_page()
 
 
+def _identify_logged_account(page: Any) -> tuple[str, str]:
+    """Read the current account identity from its own profile page."""
+    page.goto(
+        "https://www.douyin.com/user/self",
+        wait_until="domcontentloaded",
+        timeout=60_000,
+    )
+    page.wait_for_timeout(3_000)
+    sec_uid = ""
+    marker = "/user/"
+    if marker in page.url:
+        sec_uid = page.url.split(marker, 1)[1].split("?", 1)[0].split("/", 1)[0]
+    nickname = ""
+    selectors = (
+        '[data-e2e="user-title"]',
+        "h1",
+        'meta[property="og:title"]',
+    )
+    for selector in selectors:
+        locator = page.locator(selector).first
+        if not locator.count():
+            continue
+        value = (
+            locator.get_attribute("content")
+            if selector.startswith("meta")
+            else locator.inner_text()
+        )
+        nickname = str(value or "").strip()
+        if nickname:
+            break
+    if "的抖音" in nickname:
+        nickname = nickname.split("的抖音", 1)[0].strip()
+    invalid_names = {"未登录", "登录", "抖音", "Douyin"}
+    if (
+        not sec_uid
+        or sec_uid.lower() == "self"
+        or not nickname
+        or nickname in invalid_names
+    ):
+        raise RuntimeError("无法识别当前登录账号的 sec_user_id，请重新登录后再试")
+    return nickname, sec_uid
+
+
 def login(timeout_seconds: int = 180) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
@@ -88,16 +135,61 @@ def login(timeout_seconds: int = 180) -> dict[str, Any]:
             "检测到登录成功后，登录态会保存在专用用户目录。"
         )
         deadline = time.time() + timeout_seconds
+        initial_state = context.storage_state()
+        attempted_session = ""
         while time.time() < deadline:
             cookies = context.cookies()
             state = {"cookies": cookies, "origins": []}
             if has_session(state):
                 storage_state = context.storage_state()
                 sec_uid = extract_cookie(storage_state, "sec_user_id")
+                nickname = ""
+                account_key = get_account_key()
+                if is_auto_account():
+                    session_value = (
+                        extract_cookie(storage_state, "sessionid")
+                        or extract_cookie(storage_state, "sessionid_ss")
+                    )
+                    current_url_has_identity = (
+                        "/user/" in page.url and "/user/self" not in page.url
+                    )
+                    initial_session = (
+                        extract_cookie(initial_state, "sessionid")
+                        or extract_cookie(initial_state, "sessionid_ss")
+                    )
+                    should_identify = (
+                        not attempted_session
+                        or session_value != initial_session
+                        or current_url_has_identity
+                    )
+                    if not should_identify:
+                        page.wait_for_timeout(1_000)
+                        continue
+                    try:
+                        nickname, detected_sec_uid = _identify_logged_account(page)
+                    except RuntimeError:
+                        attempted_session = session_value
+                        if page.url != HOME_URL:
+                            page.goto(
+                                HOME_URL,
+                                wait_until="domcontentloaded",
+                                timeout=60_000,
+                            )
+                        page.wait_for_timeout(1_000)
+                        continue
+                    sec_uid = detected_sec_uid or sec_uid
+                    with get_conn() as conn:
+                        init_db(conn)
+                        account_key = resolve_account_profile(
+                            conn, nickname, sec_uid
+                        )
+                    remember_active_account(account_key, sec_uid, nickname)
                 path = save_auth(storage_state, sec_uid)
                 context.close()
                 return {
                     "success": True,
+                    "account": account_key,
+                    "nickname": nickname,
                     "mode": "persistent_edge_profile",
                     "profile_dir": str(get_browser_profile_dir()),
                     "state_backup": str(path),
@@ -106,6 +198,29 @@ def login(timeout_seconds: int = 180) -> dict[str, Any]:
             page.wait_for_timeout(1_000)
         context.close()
     raise RuntimeError("等待登录超时，请重新运行 login")
+
+
+def capture_profile_auth() -> dict[str, Any]:
+    """Capture cookies already persisted by a manually operated Edge profile."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        context = _launch_persistent_context(playwright, headless=True)
+        storage_state = context.storage_state()
+        cookies = storage_state.get("cookies") or []
+        if not has_session(storage_state):
+            context.close()
+            raise RuntimeError("专用 Edge 目录中没有检测到有效的登录 Cookie")
+        sec_uid = extract_cookie(storage_state, "sec_user_id")
+        saved = save_auth(storage_state, sec_uid)
+        context.close()
+    return {
+        "success": True,
+        "cookie_count": len(cookies),
+        "sec_user_id_configured": bool(sec_uid),
+        "encrypted": True,
+        "saved_file": saved.name,
+    }
 
 
 def _list_items(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -313,7 +428,6 @@ def collect(
         else [source]
     )
     results: dict[str, Any] = {}
-    account_key = get_account_key()
     with sync_playwright() as playwright:
         context = _launch_persistent_context(playwright, headless=headless)
         _restore_auth_backup(context)
@@ -333,6 +447,57 @@ def collect(
         page = _context_page(context)
         with get_conn() as conn:
             init_db(conn)
+            if is_auto_account():
+                account_key = get_account_key()
+                active = conn.execute(
+                    """
+                    SELECT nickname,platform_user_id FROM account_profiles
+                    WHERE account_key=?
+                    """,
+                    (account_key,),
+                ).fetchone()
+                if active and active.get("nickname"):
+                    nickname = str(active["nickname"])
+                    detected_sec_uid = str(active.get("platform_user_id") or "")
+                else:
+                    nickname, detected_sec_uid = _identify_logged_account(page)
+                    account_key = resolve_account_profile(
+                        conn, nickname, detected_sec_uid
+                    )
+                    remember_active_account(
+                        account_key, detected_sec_uid, nickname
+                    )
+            else:
+                nickname, detected_sec_uid = _identify_logged_account(page)
+                account_key = get_account_key()
+                profile = conn.execute(
+                    """
+                    SELECT platform_user_id FROM account_profiles
+                    WHERE account_key=?
+                    """,
+                    (account_key,),
+                ).fetchone()
+                known = str((profile or {}).get("platform_user_id") or "")
+                if known and known != detected_sec_uid:
+                    context.close()
+                    raise RuntimeError(
+                        f"账号切换保护：本地账号 {account_key} 与当前登录账号不一致"
+                    )
+                conn.execute(
+                    """
+                    UPDATE account_profiles SET platform_user_id=?,nickname=?,
+                      updated_at=?
+                    WHERE account_key=?
+                    """,
+                    (
+                        detected_sec_uid,
+                        nickname,
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                        account_key,
+                    ),
+                )
+                conn.commit()
+            sec_user_id = detected_sec_uid
             list_tasks = {task for task in tasks if task in {"favorites", "likes"}}
             if list_tasks:
                 tab_results, discovered_sec_uid = _collect_tabs(

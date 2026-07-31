@@ -315,6 +315,156 @@ SCHEMA = [
         REFERENCES direct_download_jobs(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """,
+    """
+    CREATE TABLE IF NOT EXISTS like_search_jobs (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      account_key VARCHAR(80) NOT NULL,
+      status TINYINT NOT NULL DEFAULT 0,
+      result_count INT UNSIGNED NOT NULL DEFAULT 0,
+      error_message VARCHAR(1000) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      INDEX idx_like_search_account (account_key,created_at DESC),
+      CONSTRAINT fk_like_search_account FOREIGN KEY (account_key)
+        REFERENCES account_profiles(account_key) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS like_search_terms (
+      job_id BIGINT UNSIGNED NOT NULL,
+      keyword VARCHAR(100) NOT NULL,
+      term_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+      result_count INT UNSIGNED NOT NULL DEFAULT 0,
+      PRIMARY KEY (job_id,keyword),
+      CONSTRAINT fk_like_search_term_job FOREIGN KEY (job_id)
+        REFERENCES like_search_jobs(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS like_search_results (
+      job_id BIGINT UNSIGNED NOT NULL,
+      keyword VARCHAR(100) NOT NULL,
+      aweme_id VARCHAR(32) NOT NULL,
+      position_no INT UNSIGNED NOT NULL DEFAULT 0,
+      captured_at DATETIME NOT NULL,
+      PRIMARY KEY (job_id,keyword,aweme_id),
+      INDEX idx_like_search_download (job_id,position_no,aweme_id),
+      CONSTRAINT fk_like_search_result_job FOREIGN KEY (job_id)
+        REFERENCES like_search_jobs(id) ON DELETE CASCADE,
+      CONSTRAINT fk_like_search_result_video FOREIGN KEY (aweme_id)
+        REFERENCES videos_base(aweme_id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_profiles (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      platform VARCHAR(32) NOT NULL,
+      platform_creator_id VARCHAR(255) NOT NULL,
+      nickname VARCHAR(255) NOT NULL DEFAULT '',
+      profile_url TEXT NOT NULL,
+      last_sync_at DATETIME NULL,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      UNIQUE KEY uq_creator_platform (platform,platform_creator_id),
+      INDEX idx_creator_nickname (platform,nickname)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_sync_jobs (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      creator_id BIGINT UNSIGNED NOT NULL,
+      mode ENUM('inspect','fetch','sync') NOT NULL DEFAULT 'sync',
+      status TINYINT NOT NULL DEFAULT 0,
+      pages_fetched INT UNSIGNED NOT NULL DEFAULT 0,
+      works_seen INT UNSIGNED NOT NULL DEFAULT 0,
+      new_works INT UNSIGNED NOT NULL DEFAULT 0,
+      error_message VARCHAR(1000) NOT NULL DEFAULT '',
+      started_at DATETIME NOT NULL,
+      finished_at DATETIME NULL,
+      INDEX idx_creator_sync_history (creator_id,started_at DESC),
+      CONSTRAINT fk_creator_sync_profile FOREIGN KEY (creator_id)
+        REFERENCES creator_profiles(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_works (
+      creator_id BIGINT UNSIGNED NOT NULL,
+      platform_work_id VARCHAR(255) NOT NULL,
+      local_code INT UNSIGNED NOT NULL,
+      title VARCHAR(512) NOT NULL DEFAULT '',
+      published_at DATETIME NULL,
+      content_type VARCHAR(32) NOT NULL DEFAULT 'video',
+      like_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      play_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      comment_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      share_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      favorite_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      duration_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+      is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+      webpage_url TEXT NOT NULL,
+      metadata_json LONGTEXT,
+      first_seen_at DATETIME NOT NULL,
+      last_seen_at DATETIME NOT NULL,
+      is_removed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (creator_id,platform_work_id),
+      UNIQUE KEY uq_creator_local_code (creator_id,local_code),
+      INDEX idx_creator_works_latest
+        (creator_id,published_at DESC,platform_work_id),
+      INDEX idx_creator_works_likes
+        (creator_id,like_count DESC,platform_work_id),
+      CONSTRAINT fk_creator_work_profile FOREIGN KEY (creator_id)
+        REFERENCES creator_profiles(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_media_urls (
+      id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      creator_id BIGINT UNSIGNED NOT NULL,
+      platform_work_id VARCHAR(255) NOT NULL,
+      media_type ENUM('video','cover','image','music') NOT NULL,
+      position_no INT UNSIGNED NOT NULL DEFAULT 0,
+      remote_url LONGTEXT NOT NULL,
+      refreshed_at DATETIME NOT NULL,
+      UNIQUE KEY uq_creator_media
+        (creator_id,platform_work_id,media_type,position_no),
+      INDEX idx_creator_media_work (creator_id,platform_work_id),
+      CONSTRAINT fk_creator_media_work
+        FOREIGN KEY (creator_id,platform_work_id)
+        REFERENCES creator_works(creator_id,platform_work_id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_download_tasks (
+      creator_id BIGINT UNSIGNED NOT NULL,
+      platform_work_id VARCHAR(255) NOT NULL,
+      status TINYINT NOT NULL DEFAULT 0,
+      priority SMALLINT NOT NULL DEFAULT 0,
+      local_path VARCHAR(1024) NOT NULL DEFAULT '',
+      download_error VARCHAR(1000) NOT NULL DEFAULT '',
+      retry_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+      downloaded_at DATETIME NULL,
+      updated_at DATETIME NOT NULL,
+      PRIMARY KEY (creator_id,platform_work_id),
+      INDEX idx_creator_download_queue
+        (creator_id,status,priority DESC,updated_at),
+      CONSTRAINT fk_creator_download_work
+        FOREIGN KEY (creator_id,platform_work_id)
+        REFERENCES creator_works(creator_id,platform_work_id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS creator_media_files (
+      media_url_id BIGINT UNSIGNED PRIMARY KEY,
+      local_path VARCHAR(1024) NOT NULL DEFAULT '',
+      status TINYINT NOT NULL DEFAULT 0,
+      download_error VARCHAR(1000) NOT NULL DEFAULT '',
+      updated_at DATETIME NOT NULL,
+      CONSTRAINT fk_creator_media_file_url FOREIGN KEY (media_url_id)
+        REFERENCES creator_media_urls(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
 ]
 
 
@@ -483,6 +633,48 @@ def init_db(conn: Connection) -> None:
               MODIFY asset_type ENUM('cover','image','music') NOT NULL
             """
         )
+    creator_columns = {
+        row["creator_column_name"]
+        for row in conn.execute(
+            """
+            SELECT column_name AS creator_column_name
+            FROM information_schema.columns
+            WHERE table_schema=DATABASE()
+              AND table_name='creator_works'
+            """
+        )
+    }
+    creator_column_defs = {
+        "like_count": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "play_count": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "comment_count": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "share_count": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "favorite_count": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+        "duration_seconds": "INT UNSIGNED NOT NULL DEFAULT 0",
+        "is_pinned": "BOOLEAN NOT NULL DEFAULT FALSE",
+    }
+    for name, definition in creator_column_defs.items():
+        if name not in creator_columns:
+            conn.execute(
+                f"ALTER TABLE creator_works ADD COLUMN {name} {definition}"
+            )
+    creator_like_index = conn.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM information_schema.statistics
+        WHERE table_schema=DATABASE()
+          AND table_name='creator_works'
+          AND index_name='idx_creator_works_likes'
+        """
+    ).fetchone()
+    if not creator_like_index or int(creator_like_index["total"]) == 0:
+        conn.execute(
+            """
+            ALTER TABLE creator_works
+              ADD INDEX idx_creator_works_likes
+                (creator_id,like_count DESC,platform_work_id)
+            """
+        )
     timestamp = now()
     conn.execute(
         """
@@ -535,6 +727,50 @@ def init_db(conn: Connection) -> None:
             """
         )
     conn.commit()
+
+
+def resolve_account_profile(
+    conn: Connection,
+    nickname: str,
+    platform_user_id: str,
+) -> str:
+    """Return a readable, stable account key without merging equal nicknames."""
+    from lib.utils.meta import sanitize_dirname
+
+    nickname = (nickname or "抖音账号").strip()
+    base = sanitize_dirname(nickname)
+    existing = conn.execute(
+        """
+        SELECT account_key FROM account_profiles
+        WHERE platform='douyin' AND platform_user_id=? LIMIT 1
+        """,
+        (platform_user_id,),
+    ).fetchone()
+    if existing:
+        key = existing["account_key"]
+    else:
+        collision = conn.execute(
+            "SELECT platform_user_id FROM account_profiles WHERE account_key=?",
+            (base,),
+        ).fetchone()
+        key = (
+            f"{base}_{platform_user_id[-6:]}"
+            if collision and collision["platform_user_id"] != platform_user_id
+            else base
+        )
+    timestamp = now()
+    conn.execute(
+        """
+        INSERT INTO account_profiles
+          (account_key,platform,platform_user_id,nickname,created_at,updated_at)
+        VALUES (?,'douyin',?,?,?,?)
+        ON DUPLICATE KEY UPDATE nickname=VALUES(nickname),
+          platform_user_id=VALUES(platform_user_id),updated_at=VALUES(updated_at)
+        """,
+        (key, platform_user_id, nickname, timestamp, timestamp),
+    )
+    conn.commit()
+    return key
 
 
 def upsert_aweme(

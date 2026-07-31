@@ -4,6 +4,7 @@ import unittest
 import os
 
 from lib.analysis.content_classifier import classify_one
+from lib.creator.service import _bilibili_creator_id, _douyin_creator_id
 from lib.db.db_v4 import SCHEMA, check_database, get_conn, get_summary, init_db
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,9 +16,12 @@ from lib.download.download_videos import (
     media_stem,
 )
 from lib.link.resolver import detect_platform
+from lib.search.like_search import _clean_keywords
+from lib.utils.auth import normalize_imported_cookies
 from lib.utils.meta import (
     get_account_downloads_dir,
     get_browser_profile_dir,
+    get_creator_downloads_dir,
     get_data_root,
     migrate_legacy_default_downloads,
     set_account,
@@ -55,6 +59,19 @@ class CoreTest(unittest.TestCase):
         self.assertIn("account_download_tasks", schema)
         self.assertIn("direct_download_jobs", schema)
         self.assertIn("direct_media_urls", schema)
+        self.assertIn("like_search_jobs", schema)
+        self.assertIn("like_search_terms", schema)
+        self.assertIn("like_search_results", schema)
+        self.assertIn("creator_profiles", schema)
+        self.assertIn("creator_sync_jobs", schema)
+        self.assertIn("creator_works", schema)
+        self.assertIn("creator_media_urls", schema)
+        self.assertIn("creator_download_tasks", schema)
+        self.assertIn("creator_media_files", schema)
+        self.assertIn("like_count BIGINT UNSIGNED", schema)
+        self.assertIn("play_count BIGINT UNSIGNED", schema)
+        self.assertIn("is_pinned BOOLEAN", schema)
+        self.assertIn("idx_creator_works_likes", schema)
 
     def test_media_extension(self) -> None:
         self.assertEqual(_extension("https://x/a.webp?x=1", ".jpg"), ".webp")
@@ -69,6 +86,7 @@ class CoreTest(unittest.TestCase):
             self.assertFalse(_has_expected_media_header(path, "video"))
             path.write_bytes(b"\0\0\0\x18ftypisom" + b"\0" * 20)
             self.assertTrue(_has_expected_media_header(path, "video"))
+            self.assertTrue(_has_expected_media_header(path, "music"))
 
     def test_readable_media_stem(self) -> None:
         stem = media_stem(17, '张三/测试', '周末："家常菜" | 简单做法')
@@ -104,6 +122,57 @@ class CoreTest(unittest.TestCase):
         )
         self.assertEqual(
             detect_platform("https://www.example.com/watch/1"), "example"
+        )
+
+    def test_creator_profile_ids(self) -> None:
+        self.assertEqual(
+            _douyin_creator_id("https://www.douyin.com/user/MS4wLjABAAAA"),
+            "MS4wLjABAAAA",
+        )
+        self.assertEqual(
+            _bilibili_creator_id("https://space.bilibili.com/123456/video"),
+            "123456",
+        )
+
+    def test_creator_downloads_are_isolated(self) -> None:
+        original_root = get_data_root()
+        try:
+            with TemporaryDirectory() as directory:
+                set_data_dir(directory)
+                douyin = get_creator_downloads_dir("douyin", "同名作者")
+                bilibili = get_creator_downloads_dir("bilibili", "同名作者")
+                self.assertNotEqual(douyin, bilibili)
+                self.assertEqual(douyin.name, "同名作者")
+                self.assertEqual(douyin.parent.name, "douyin")
+        finally:
+            set_data_dir(original_root)
+
+    def test_cookie_import_normalization(self) -> None:
+        cookies = normalize_imported_cookies(
+            [
+                {
+                    "domain": ".douyin.com",
+                    "name": "sessionid",
+                    "value": "test-only",
+                    "expirationDate": 2000000000,
+                    "sameSite": "no_restriction",
+                    "secure": True,
+                },
+                {
+                    "domain": ".example.com",
+                    "name": "ignored",
+                    "value": "ignored",
+                },
+            ]
+        )
+        self.assertEqual(len(cookies), 1)
+        self.assertEqual(cookies[0]["sameSite"], "None")
+        self.assertEqual(cookies[0]["expires"], 2000000000.0)
+
+    def test_like_search_keywords_are_deduplicated(self) -> None:
+        self.assertEqual(
+            _clean_keywords([" 舞蹈 ", "cos", "舞蹈", ""]),
+            ["舞蹈", "cos"],
         )
 
     def test_legacy_download_migration(self) -> None:
