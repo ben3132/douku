@@ -1,41 +1,121 @@
 # DouKU 2.2
 
-DouKU 用于归档和整理当前登录账号自己的抖音数据。它不提供公开搜索、
-批量账号爬取或绕过登录功能。
+DouKU（斗库）是一套面向国内网络环境的本地视频数据归档工具。它帮助用户在自己的电脑上采集、整理和下载本人有权访问的抖音账号数据，也可以同步指定抖音作者、B站 UP 主，并处理单个或批量分享链接。
 
-## 能力范围
+项目的目标不是搭建公开视频站点，而是将分散在平台页面中的作品信息、媒体地址和本地文件整理成可查询、可增量更新、可继续下载的个人资料库。
 
-- 扫码登录并保存浏览器登录态
-- 采集自己的点赞和收藏
-- 补全视频详情、播放地址和近期视频评论
-- 记录数据来源，重复运行时更新而不是重复插入
-- 规则分类、按分类下载、生成本地 HTML 报告
-- 解析并下载抖音、B站及 yt-dlp 支持的其他公开链接
-- 按抖音账号隔离浏览器、任务和媒体目录
-- MySQL 8.0 分层存储，按更新频率拆表并针对 1 万条以上视频建立索引
+## 项目解决什么问题
 
-抖音 Web 接口属于站点内部接口，可能随时调整。本项目把接口配置集中在
-`lib/collector.py`，遇到变化时只需更新该模块。
+日常保存短视频数据通常会遇到这些问题：
 
-## 环境
+- 点赞和收藏数量较多，网页只能逐页浏览。
+- Cookie 容易失效，脚本与日常浏览器登录状态不一致。
+- 视频、封面、图文图片、配乐和作品信息分散，无法建立对应关系。
+- 不同账号、不同作者和临时分享链接下载的文件容易混在一起。
+- 单文件 JSON 不适合管理数千到数万条作品。
+- 第三方数据平台能够辅助发现热门作品，但最终仍需要回到原平台核验和下载。
 
-- Windows 10/11
+DouKU 将这些步骤组合为一条本地工作流：
+
+```text
+浏览器登录或导入 Cookie
+        ↓
+采集账号、作者或链接的轻量元数据
+        ↓
+MySQL 去重、索引、筛选和生成下载任务
+        ↓
+解析真实媒体 URL
+        ↓
+下载视频、封面、图文图片和配乐
+        ↓
+校验文件并记录本地路径
+```
+
+## 核心能力
+
+### 个人抖音账号
+
+- 采集当前登录账号的点赞、收藏、作品详情和评论。
+- 自动分页并记录采集来源和原始顺序。
+- 使用抖音个人主页自带搜索框筛选已点赞作品。
+- 支持多个关键词、每个关键词取前 N 条，以及跨关键词去重。
+- 不同登录账号使用独立的数据和下载目录。
+
+### 指定作者与 UP 主
+
+- 遍历抖音作者或 B站 UP 主的当前公开投稿。
+- 获取最新 N 条、指定时间范围或后续新增作品。
+- 按视频/图文、发布时间、点赞、评论、分享、收藏和时长筛选。
+- 排除置顶作品，或按作品 ID 精确下载。
+- 使用抖音作者主页的“搜索 Ta 的作品”核验第三方平台定位出的作品。
+- 定期重复执行 `sync` 时跳过已经入库和下载的内容。
+
+### 分享链接解析与下载
+
+- 支持单个链接、多个链接和文本文件批量导入。
+- 重点支持抖音与 B站，其他站点由 `yt-dlp` 的可用解析器处理。
+- 可只解析真实媒体 URL，也可直接下载。
+- 直接链接下载与个人账号、指定作者的数据分开保存。
+
+### 数据和文件管理
+
+- MySQL 分表保存作品、统计数据、媒体 URL、下载任务和本地文件索引。
+- 视频、封面、图文图片和配乐按类型存放。
+- 文件名包含五位以内本地编号、作者名和作品文案。
+- 支持并发下载、失败重试、Range 续传和 `.part` 临时文件。
+- 下载完成后检查视频或音频文件头，避免将错误响应保存为媒体文件。
+
+### 登录状态与隐私
+
+- 使用独立的 Edge 持久化用户目录保存登录状态。
+- 支持导入浏览器扩展导出的抖音 Cookie。
+- Cookie 使用 Windows DPAPI 加密后保存在用户本机，不写入项目目录。
+- 代码目录与数据库、浏览器状态、下载内容相互分离。
+
+## 技术结构
+
+| 模块 | 作用 |
+|---|---|
+| Playwright + Edge | 登录、页面操作、站内搜索和接口响应捕获 |
+| Requests | 媒体文件下载、连接复用和断点续传 |
+| yt-dlp | B站及其他受支持站点的链接解析与下载 |
+| MySQL 8.0 | 作品、统计、媒体 URL、任务和文件索引 |
+| Windows DPAPI | 本机 Cookie 加密存储 |
+| FFmpeg（可选） | 部分站点的音视频合并 |
+
+主要代码目录：
+
+```text
+lib/
+├─ analysis/    # 分类和本地报告
+├─ creator/     # 抖音作者、B站 UP 主采集与筛选
+├─ db/          # MySQL 表结构和迁移
+├─ download/    # 账号作品下载
+├─ link/        # 分享链接解析与直接下载
+├─ search/      # 点赞作品站内关键词搜索
+└─ utils/       # 配置、账号、Cookie 和路径管理
+```
+
+## 环境要求
+
+- Windows 10 或 Windows 11
 - Python 3.10+
-- Microsoft Edge 或 Playwright Chromium
-- 可正常访问抖音的国内网络
+- Microsoft Edge
+- MySQL 8.0
+- FFmpeg（部分 B站或其他站点需要）
+
+安装依赖：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python -m playwright install chromium
 ```
 
-建议安装 FFmpeg 并在用户配置中设置 `ffmpeg_path`。B站等站点的高画质
-通常使用独立视频流和音频流，需要 FFmpeg 合并；未安装时会降级选择站点
-提供的最佳单文件格式。
+## 配置
 
-把公开配置模板复制到当前 Windows 用户的应用配置目录，并按本机情况修改
-数据目录和 MySQL 路径：
+推荐将数据放在项目目录之外。复制示例配置：
 
 ```powershell
 $configDir = Join-Path $env:LOCALAPPDATA "DouKU"
@@ -43,196 +123,201 @@ New-Item -ItemType Directory -Force $configDir
 Copy-Item douku_config.example.json (Join-Path $configDir "config.json")
 ```
 
-也可以通过 `DOUKU_CONFIG` 指定其他配置文件位置。用户配置始终放在项目目录
-之外，避免提交或打包源码时携带个人路径。
+编辑 `%LOCALAPPDATA%\DouKU\config.json`：
 
-机器上有 Edge 时无需下载浏览器。若没有：
-
-```powershell
-python -m playwright install chromium
+```json
+{
+  "data_dir": "D:\\DouKUData",
+  "database": "mysql",
+  "mysql_port": 3307,
+  "mysqld_path": "C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqld.exe",
+  "ffmpeg_path": "C:\\ffmpeg\\bin"
+}
 ```
 
-可通过环境变量指定 Chrome：
+也可以临时指定数据目录：
 
 ```powershell
-$env:DOUKU_BROWSER_CHANNEL = "chrome"
+python douku.py --data-dir D:\DouKUData status
 ```
 
-## 使用
-
-项目使用 MySQL 8.0。请先创建 `douku` 数据库和仅操作该库的应用账号，然后
-把连接信息保存到数据目录的 `private/mysql.json`。可以复制模板：
+MySQL连接配置保存在数据目录，而不是代码仓库：
 
 ```powershell
 New-Item -ItemType Directory -Force D:\DouKUData\private
 Copy-Item mysql.example.json D:\DouKUData\private\mysql.json
 ```
 
-修改其中的数据库密码后再初始化：
+## 快速开始
+
+初始化数据库：
 
 ```powershell
-# 初始化/升级数据库
 python douku.py init
+```
 
-# 首次扫码登录；自动创建 private/edge_profile 专用 Edge 用户目录
+打开专用 Edge 并完成抖音登录：
+
+```powershell
 python douku.py login
+```
 
-# 检查数据和登录态
+检查登录状态和本地数据：
+
+```powershell
 python douku.py status
-
-# 一次采集主要数据；默认每类 3 页，评论和详情各 20 个视频
-python douku.py fetch all
-
-# 也可以分别采集
-python douku.py fetch favorites --pages 10
-python douku.py fetch likes --pages 10
-python douku.py fetch details --limit 100
-python douku.py fetch comments --limit 50
-
-python douku.py classify
-python douku.py download --limit 20
-python douku.py report
-python douku.py check
 ```
 
-不同抖音账号使用不同本地别名。浏览器配置、采集来源、下载任务和媒体文件
-都会按别名隔离：
+采集当前账号：
 
 ```powershell
-python douku.py --account account_a login
-python douku.py --account account_a fetch all
-python douku.py --account account_a download --limit 100
-
-python douku.py --account account_b login
-python douku.py --account account_b fetch all
-python douku.py --account account_b download --limit 100
+python douku.py fetch all --pages 10
 ```
 
-解析陌生链接并下载：
+下载已采集作品：
 
 ```powershell
-# 单条或多条链接
+python douku.py download --limit 100 --workers 3
+```
+
+## 常用示例
+
+### 搜索当前账号赞过的作品
+
+```powershell
+python douku.py search likes `
+  --keywords "美女,舞蹈,cos,二次元" `
+  --pages 0
+```
+
+根据搜索任务下载，每个关键词取前20条：
+
+```powershell
+python douku.py download --search-job 1 --per-keyword 20
+```
+
+### 同步指定抖音作者
+
+```powershell
+python douku.py creator fetch "抖音作者主页链接" --pages 0
+python douku.py creator sync "抖音作者主页链接" --pages 0
+```
+
+点赞最高的5条视频，先预览：
+
+```powershell
+python douku.py creator download "作者名称或ID" `
+  --type video --sort likes --order desc --limit 5 --dry-run
+```
+
+2025年最早发布的2条视频：
+
+```powershell
+python douku.py creator download "作者名称或ID" `
+  --type video `
+  --after 2025-01-01 --before 2026-01-01 `
+  --sort published --order asc --limit 2
+```
+
+排除置顶后的最新3条视频：
+
+```powershell
+python douku.py creator download "作者名称或ID" `
+  --type video --exclude-pinned `
+  --sort published --order desc --limit 3
+```
+
+### 第三方平台定位后回到抖音核验
+
+第三方数据平台只用于发现候选作品。取得作品文案后，在作者主页调用抖音自带搜索：
+
+```powershell
+python douku.py creator search `
+  "抖音作者主页链接" `
+  "候选作品标题或文案"
+```
+
+确认结果中的作品ID后精准下载：
+
+```powershell
+python douku.py creator download "作者名称或ID" `
+  --work-id 作品ID
+```
+
+### 同步 B站 UP 主
+
+```powershell
+python douku.py creator fetch "https://space.bilibili.com/数字ID/video" --latest 50
+python douku.py creator download "UP主名称或ID" --latest 50
+```
+
+### 下载分享链接
+
+```powershell
 python douku.py link "https://v.douyin.com/..."
 python douku.py link "https://www.bilibili.com/video/BV..."
-
-# 每行一个链接
 python douku.py link --file links.txt
-
-# 只解析真实媒体 URL 并写入 MySQL，不下载
-python douku.py link --resolve-only "https://..."
+python douku.py link --resolve-only "分享链接"
 ```
 
-通用链接解析由 yt-dlp Extractor 完成，解析结果先写入
-`direct_download_jobs` 和 `direct_media_urls`，下载文件再写入
-`direct_download_files`。抖音会使用当前 `--account` 对应的专用 Edge
-登录状态，但成品仍进入 `direct` 区，不与账号自动归档混放。
-
-`login` 使用 DouKU 专用的 Edge 持久化用户目录。用户只需在该窗口登录一次，
-后续 Cookie、Local Storage 和设备会话由 Edge 自动维护。原有
-`private/douyin_state.json` 会在首次运行时自动导入，并继续作为状态备份。
-项目不会读取或修改用户日常 Edge 的主配置目录。
-
-`fetch` 默认显示浏览器窗口，这是当前抖音 Web 端更可靠的方式。确认账号
-环境稳定后可增加 `--headless` 在后台运行，但无头模式更容易触发空白页或
-验证。
-
-## 数据与隐私
-
-本机数据目录由 `%LOCALAPPDATA%\DouKU\config.json`、
-`DOUKU_DATA_DIR` 环境变量或 `--data-dir` 参数配置。例如
-`D:\DouKUData`：
-
-- `mysql/data/`：DouKU 专用 MySQL 8.0 实例数据
-- `private/mysql.json`：MySQL 应用账号配置
-- `private/douyin_state.json`：浏览器登录态
-- `private/edge_profile/`：DouKU 专用 Edge 持久化用户目录
-- `downloads/`：视频
-- `output/report.html`：报告
-
-下载内容按数据类型集中存放，文件名使用
-`五位内部编号_作者_文案摘要`。编号来自 `videos_base.file_code`，数据库仍以
-完整 `aweme_id` 关联，避免截断抖音作品 ID 产生冲突：
+## 数据目录
 
 ```text
-downloads/
-├── accounts/
-│   ├── account_a/
-│   │   ├── videos/
-│   │   ├── covers/
-│   │   └── image_posts/
-│   │       ├── covers/
-│   │       ├── images/
-│   │       └── music/
-│   └── account_b/
-│       └── ...
-└── direct/
-    ├── douyin/
-    │   └── D000004_文案摘要.mp4
-    ├── bilibili/
-    │   └── D000002_视频标题.mp4
-    └── 其他平台/
+DouKUData/
+├─ private/
+│  ├─ mysql.json
+│  ├─ active_account.json
+│  └─ edge_profile/
+├─ mysql/
+├─ downloads/
+│  ├─ accounts/
+│  │  └─ 账号名称/
+│  ├─ creators/
+│  │  ├─ douyin/作者名称/
+│  │  └─ bilibili/UP主名称/
+│  └─ direct/
+├─ output/
+└─ logs/
 ```
 
-编号固定显示为五位，范围为 `00001`—`99999`；作者最多 16 个字符，
-文案摘要最多 32 个字符，Windows 禁用字符会自动替换。视频作品与图文作品
-使用完全独立的目录；同一图文作品的封面、原图和背景音乐共用文件名主体，
-原图再追加顺序号。图文接口返回的背景音乐不会再误存为 `.mp4`。不再生成
-每视频 JSON 或文件索引。
-所有关联统一由 MySQL 的 `aweme_id` 维护：
+Cookie密文默认位于：
 
-| 更新频率 | 表 | 用途 |
-|---|---|---|
-| 低频 | `videos_base`、`authors_base` | 视频与作者基础信息 |
-| 中频 | `videos_stats`、`authors_stats` | 点赞、评论、粉丝等统计 |
-| 高频 | `video_urls` | 视频、封面、音乐 URL 及刷新状态 |
-| 高频 | `download_tasks` | 下载队列、重试、错误和本地视频路径 |
-| 按次写入 | `video_sources` | 点赞/收藏来源、采集时间和列表顺序 |
-| 按资源 | `media_assets` | 封面、图文、背景音乐 URL、序号和本地路径 |
-| 按账号 | `account_video_sources` | 不同抖音账号的点赞、收藏和详情来源 |
-| 按账号 | `account_download_tasks` | 各账号独立下载队列与视频路径 |
-| 按账号 | `account_media_files` | 各账号独立封面、图文和音乐路径 |
-| 通用链接 | `direct_download_jobs` | 陌生链接解析与下载任务 |
-| 通用链接 | `direct_media_urls` | 解析得到的真实视频、音频和清单 URL |
-| 通用链接 | `direct_download_files` | 陌生链接下载后的独立文件路径 |
-| 大文本 | `comments` | 评论内容 |
-| 低频 | `videos_classification` | 内容分类 |
-
-关键队列均有组合索引，例如来源顺序
-`(source, captured_at, position_no)`、下载队列
-`(status, priority, updated_at)` 和 URL 刷新队列
-`(url_status, refreshed_at)`。1 万视频规模无需扫描全表。
-
-建议 MySQL 仅监听 `127.0.0.1`。程序优先连接已经运行的 MySQL；使用独立
-实例时，可通过 `DOUKU_MYSQLD` 或用户配置文件的 `mysqld_path`
-指定启动程序，并在数据目录提供 `mysql/my.ini`。
-
-认证文件和数据目录均已加入 `.gitignore`。不要把
-`private/douyin_state.json` 或 `private/mysql.json` 发给他人。
-
-可以使用外置数据目录：
-
-```powershell
-python douku.py --data-dir D:\DouKUData status
+```text
+%LOCALAPPDATA%\DouKU\secrets\
 ```
 
-或设置 `DOUKU_DATA_DIR` 环境变量。
-
-## 发布与隐私
-
-以下内容只保存在用户本机，均被 `.gitignore` 排除：
-
-- `%LOCALAPPDATA%\DouKU\config.json`
-- `data/` 和外置数据目录
-- `private/mysql.json`
-- `private/douyin_state.json`
-- `private/edge_profile/`
-- MySQL 数据、日志、下载媒体和本地报告
-
-不要提交现有项目的旧 Git 历史；旧历史可能包含早期登录文件。公开发布时应
-从当前清理后的文件重新初始化一个全新的 Git 仓库。
+这些目录均被排除在Git版本之外。
 
 ## 使用边界
 
-仅采集本人账号中本人有权访问的数据，并控制采集频率。站点出现验证码、
-频率限制或权限提示时应停止采集，不应尝试绕过。通用链接功能只应用于用户
-有权访问和保存的内容，不绕过 DRM、付费墙、登录权限或平台访问控制。
+- 只能采集当前账号有权访问的内容。
+- 项目不会绕过登录、私密账号、付费、会员、地区限制、DRM或平台验证。
+- 作者删除、隐藏或平台接口不再返回的作品无法保证获取。
+- 播放量等指标可能不会出现在作者列表接口中，此时数据库会记录为0。
+- 第三方数据平台的排行和历史统计只作为候选依据，最终以抖音站内核验结果为准。
+- 平台接口和页面结构变化后，采集规则可能需要更新。
+- 使用者应遵守平台服务条款、著作权规则和所在地法律，仅处理本人有权保存的数据。
+
+## 测试
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+本机MySQL集成测试：
+
+```powershell
+$env:DOUKU_INTEGRATION_TESTS = "1"
+python -m unittest tests.test_core.CoreTest.test_mysql_connection -v
+```
+
+## 版本
+
+- `v2.2.x`：作者/UP主同步、站内搜索、精确作品下载和高级筛选。
+- `v2.1`：通用链接下载、账号隔离和代码数据分离。
+
+详细变化见 [RELEASE_NOTES_2.2.md](RELEASE_NOTES_2.2.md)。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。
